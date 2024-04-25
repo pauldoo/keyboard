@@ -2,6 +2,7 @@
 #![no_main]
 
 use cortex_m::delay::Delay;
+use embedded_hal::digital::InputPin;
 // The macro for our start-up function
 use rp_pico::entry;
 
@@ -92,7 +93,7 @@ fn main() -> ! {
     {
         let bus_ref = unsafe { USB_BUS.as_ref().unwrap() };
         // Set up the USB HID Class Device driver, providing Mouse Reports
-        let usb_hid = HIDClass::new(bus_ref, KeyboardReport::desc(), 20);
+        let usb_hid = HIDClass::new(bus_ref, KeyboardReport::desc(), 10u8);
         unsafe {
             USB_HID = Some(usb_hid)
         }
@@ -133,34 +134,98 @@ fn main() -> ! {
     // Set the LED to be an output
     let mut led_pin = pins.led.into_push_pull_output();
 
+    let mut pin_21 = pins.gpio21.into_pull_down_input();
+    let mut pin_22 = pins.gpio22.into_push_pull_output();
+
     unsafe {
         // Enable the USB interrupt
         pac::NVIC::unmask(hal::pac::Interrupt::USBCTRL_IRQ);
     };
 
 
+    // Simple debounce. 
+    let debounce_width = 5u8;
+    let min = debounce_width * 0;
+    let lower = debounce_width * 1;
+    let upper = debounce_width * 2;
+    let max = debounce_width * 3;
+
+    let mut state_level = min;
+    let mut last_transmitted_state: bool = false;
+    loop {
+        pin_22.set_high().unwrap();
+        delay.delay_us(1);
+        let input = pin_21.is_high().unwrap();
+        pin_22.set_low().unwrap();
+
+        match (state_level, input) {
+            (n, false) if n == min => {
+                // saturated
+            }
+            (n, true) if n == max => {
+                // saturated
+            }
+            (_, false) => {
+                state_level -= 1;
+            }
+            (_, true) => {
+                state_level += 1;
+            }
+        }
+
+
+        match (last_transmitted_state, state_level) {
+            (false, n) if (n >= upper) => {
+                // value is in the upper 1/3 now, press the key
+                led_pin.set_high().unwrap();
+                press_key(KeyboardUsage::KeyboardPp);
+                last_transmitted_state = true;
+            }
+            (true, n) if (n <= lower) => {
+                // value is in the lower 1/3 now, release the key
+                led_pin.set_low().unwrap();
+                release_all_keys();
+                last_transmitted_state = false;
+            }
+            _ => {
+
+            }
+        }
+
+        delay.delay_ms(1);
+    }
+
     // Blink for a bit
     loop {
+        
         led_pin.set_high().unwrap();
-        send_key(KeyboardUsage::KeyboardPp, &mut delay);
+        //send_key(KeyboardUsage::KeyboardPp, &mut delay);
         delay.delay_ms(500);
 
         led_pin.set_low().unwrap();
-        send_key(KeyboardUsage::KeyboardQq, &mut delay);
+        //send_key(KeyboardUsage::KeyboardQq, &mut delay);
         delay.delay_ms(500);
     }
 }
 
 fn send_key(key: KeyboardUsage, delay: &mut Delay) {
     // Press
-    let mut report: KeyboardReport = KeyboardReport::default();
-    report.keycodes[0] = key as u8;
-    send_report(&report);
+    press_key(key);
     
     // Wait
     delay.delay_ms(50);
 
     // Release
+    release_all_keys();
+}
+
+fn press_key(key: KeyboardUsage) {
+    let mut report: KeyboardReport = KeyboardReport::default();
+    report.keycodes[0] = key as u8;
+    send_report(&report);
+}
+
+fn release_all_keys() {
     send_report(&KeyboardReport::default());
 }
 
