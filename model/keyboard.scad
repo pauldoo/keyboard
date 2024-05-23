@@ -31,8 +31,8 @@ translate([0, -30, 0]) {
 
     scale([-1, 1, 1]) {
         difference() {
-            cube([20, 20, 3]);
-            translate([10, 10, 0]) {
+            cube([15, 15, 3]);
+            translate([7.5, 7.5, 0]) {
                 linear_extrude(height=3, center=true) {
                     text("P", font="Liberation Mono:style=Bold", halign="center", valign="center");
                 }
