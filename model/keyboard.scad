@@ -3,6 +3,13 @@
 $fs = 0.1;
 $fa = 1;
 
+// width of a key face
+key_face_d = 15;
+// thickness of a key face
+key_face_t = 2;
+// length of key stem
+stem_l = 4;
+
 module switch_hole(d) {
     translate([-d/2, -d/2, -1]) {
       cube([d, d, 3]);
@@ -29,21 +36,17 @@ difference() {
 }
 }
 
-if (false) {
-// key letter print test
-translate([0, -30, 0]) {
-
-    scale([-1, 1, 1]) {
+module key_face(s) {
+    translate([0,0,key_face_t/2]) {
         difference() {
-            cube([15, 15, 3]);
-            translate([7.5, 7.5, 0]) {
-                linear_extrude(height=3, center=true) {
-                    text("P", font="Liberation Mono:style=Bold", halign="center", valign="center");
+            cube([key_face_d, key_face_d, key_face_t], center=true);
+            translate([0, 0, key_face_t - 0.5]) {
+                linear_extrude(height=key_face_t, center=true) {
+                    text(s, font="Liberation Mono:style=Bold", halign="center", valign="center");
                 }
             }
         }
     }
-}
 }
 
 module chorner(r, d) {
@@ -59,7 +62,7 @@ module chorner(r, d) {
 //chorner(1, 3);
 
 module stem() {
-    depth = 8; // socket has 4mm depth, so 4mm pokes out.
+    depth = stem_l + 1; // socket has 4mm depth
     width = 5.6; // 5.5 is basically perfect, minute wobble..? // 6; // 5
     cross_t = 1.5; // 1.25; // 1
     cross_d = 4.25; // 4; // 3
@@ -100,5 +103,32 @@ module stem() {
 
     }
 }
-stem();
 
+module key_cap() {
+    stem();
+    translate([0, 0, stem_l]) {
+        key_face("P");
+    }
+    for (a=[0, 90, 180, 270]) {
+        rotate(a, [0,0,1]) {
+            multmatrix([
+                [1,0,-1/(stem_l + key_face_t),key_face_d/2],
+                [0,1,0,-key_face_d/2],
+                [0,0,1,0]]
+            ) {
+                cube([1, key_face_d, stem_l + key_face_t]);
+            }
+            translate([key_face_d/2, key_face_d/2, 0]) {
+                difference() {
+                    cylinder(stem_l + key_face_t, 1, 0);
+                    translate([-1, -1, -0.5]) {
+                        cube([1, 1, stem_l + key_face_t + 1]);
+                    }
+                    
+                }
+            }
+        }
+    }
+}
+
+key_cap();
