@@ -10,31 +10,22 @@ key_face_t = 2;
 // length of key stem
 stem_l = 4;
 
-module switch_hole(d) {
-    translate([-d/2, -d/2, -1]) {
-      cube([d, d, 3]);
+key_stride = 19;
+board_t = 5;
+border = 2;
+
+module switch_hole() {
+    // make a hold in the center
+    d = 13.9;
+    translate([-d/2, -d/2, -0.5]) {
+      cube([d, d, board_t+1]);
+    }
+    e = (d + key_stride) / 2;
+    translate([-e/2, -e/2, 1.5]) {
+      cube([e, e, board_t+1]);
     }
 }
-if (false) {
-// test different switch hole sizes.
-difference() {
-    cube([100, 40, 1.5]);
-    translate([25, 20, 0]) {
-        // this was the winner
-        switch_hole(13.9);
-    }
-    translate([50, 20, 0]) {
-        switch_hole(14);
-    }
-    translate([75, 20, 0]) {
-        // Dot beside the bigger one so I can tell which is which.
-        switch_hole(14.1);
-        translate([-1.5, 11, -1]) {
-            cube([3, 3, 3]);
-        }
-    }
-}
-}
+
 
 module key_face(s) {
     translate([0,0,key_face_t/2]) {
@@ -131,4 +122,32 @@ module key_cap() {
     }
 }
 
-key_cap();
+module left_board() {
+    rows = 4;
+    cols = 4;
+    difference() {
+        cube([
+            cols * key_stride + 2 * border,
+            rows * key_stride + 2 * border,
+            board_t
+        ]);
+    
+        for(r = [0:4]) {
+            xo = r % 2 == 0 ? 0 : 0.5;
+            for(i = [0:10]) {
+                translate([
+                    border + (i+xo+0.5) * key_stride,
+                    border + (r+0.5)*key_stride,
+                    0]
+                ) {
+                    switch_hole();
+                }
+            }
+       }
+    }
+}
+
+module right_board() {
+}
+
+left_board();
