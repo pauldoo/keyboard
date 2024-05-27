@@ -50,8 +50,12 @@ module switch_hole() {
 }
 
 
-module key_face(s1, s2=undef, width=1.0) {
+module key_face(s1, s2=undef, width=1.0, bump=false) {
     translate([0,0,key_face_t/2]) {
+        if (bump) {
+            translate([0, -0.375*key_face_d, key_face_t/2])
+            cube([key_face_d/3, 0.5, 1.0], center=true);
+        }
         difference() {            
             cube([key_face_d + (width-1.0)*key_stride, key_face_d, key_face_t], center=true);
             
@@ -155,10 +159,10 @@ module key_wall(x, y) {
     }
 }
 
-module key_cap(s1, s2, width) {
+module key_cap(s1, s2, width, bump) {
     stem();
     translate([0, 0, stem_l]) {
-        key_face(s1, s2, width);
+        key_face(s1, s2, width, bump);
     }
     for (a=[0, 180]) {
         rotate(a, [0,0,1]) {
@@ -205,7 +209,7 @@ module switch_holes(widths, ltr, idx=undef) {
 
 module left_board() {
     rows = 6;
-    cols = 8.75;
+    cols = 7.25 + 0.5 + magic_key_width/2;
 
     cube([border, (rows + fn_key_fudge - 1) * key_stride + 2 * border, keeb_depth]);
     translate([
@@ -219,7 +223,7 @@ module left_board() {
             board_t
         ]);
     
-        translate([border, 0, 0]) {
+        translate([border + (-magic_key_width/2 + 0.5) * key_stride, 0, 0]) {
             // esc + f1-6
             translate([0, border + 0.5*fn_key_fudge*key_stride,0])
             switch_holes([[magic_key_width], 1, 1, 1, 1, 1, 1, 1], true);
@@ -302,8 +306,9 @@ module right_board() {
 module key_row(labels, idx) {
     if (idx < len(labels)) {
         width = len(labels[idx]) < 3 ? 1.0 : labels[idx][2];
+        bump = len(labels[idx]) < 4 ? false : labels[idx][3];
         translate([key_stride * width / 2, 0, 0])
-        key_cap(labels[idx][0], labels[idx][1], width);
+        key_cap(labels[idx][0], labels[idx][1], width, bump);
         
         translate([key_stride * width, 0, 0])
         key_row(labels, idx+1);
@@ -339,6 +344,7 @@ module all_keys() {
             ["Del"]
         ],    
         [
+            ["\U0f0bed"],
             ["`", "¬"],
             ["1", "!"],
             ["2", "\""],
@@ -355,6 +361,7 @@ module all_keys() {
             ["\U0f0b5c", undef, 2.0],
             ["Home"]
         ], [
+            ["\U0f0bf0"],
             ["\U0f0312", undef, tab_width],
             ["Q"],
             ["W"],
@@ -370,14 +377,15 @@ module all_keys() {
             ["]", "}"],
             ["End"]
         ], [
+            ["\U0f0bf3"],
             ["\U0f0632", undef, cl_width],
             ["A"],
             ["S"],
             ["D"],
-            ["F"],
+            ["F", undef, 1.0, true],
             ["G"],
             ["H"],
-            ["J"],
+            ["J", undef, 1.0, true],
             ["K"],
             ["L"],
             [";", ":"], 
@@ -385,6 +393,7 @@ module all_keys() {
             ["#", "~"],
             ["PgUp"]
         ], [
+            ["\U0f0bf6"],
             ["\U0f0636", undef, shift_width],
             ["\\", "|"],
             ["Z"],
@@ -401,6 +410,7 @@ module all_keys() {
             ["\U00eaa1", undef], // up
             ["PgDn"]
         ], [
+            ["\U0f0bf9"],
             ["Ctrl", undef, csa_width],
             ["\U00e712", undef, csa_width], // super
             ["Alt", undef, csa_width],
@@ -422,7 +432,4 @@ translate([9*key_stride + border*2, 0, 0]) right_board();
 
 translate([0, -2 * key_stride, 0]) all_keys();
 
-k = 6.0;
-//k = k + 1;
-echo(k);
 
