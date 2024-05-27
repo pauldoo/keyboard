@@ -176,6 +176,25 @@ module key_cap(s1, s2, width, bump) {
     }
 }
 
+module enter_key() {
+    // Just magic, not a lot of code shared with other keys.
+    
+    translate([0, 0, stem_l]) {
+        cube([key_face_d + key_stride * (enter_top_width-1), key_face_d, key_face_t]);
+        
+        translate([(enter_top_width - enter_bottom_width)*key_stride, -key_stride, 0])
+        cube([key_face_d + key_stride * (enter_bottom_width-1), key_face_d + key_stride, key_face_t]);
+    }
+    
+    translate([
+        key_face_d/2 + (enter_top_width-1 - (enter_bottom_width-1)/2)*key_stride,
+        (key_face_d - key_stride)/2,
+        0])
+    stem(); 
+    
+    // TODO: enter key walls. :(
+}
+
 module switch_holes(widths, ltr, idx=undef) {
     if (idx == undef) {
         if (ltr) {
@@ -432,4 +451,5 @@ translate([9*key_stride + border*2, 0, 0]) right_board();
 
 translate([0, -2 * key_stride, 0]) all_keys();
 
+translate([0, -9 * key_stride, 0]) enter_key();
 
