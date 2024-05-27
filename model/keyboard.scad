@@ -14,7 +14,7 @@ stem_l = 4;
 key_stride = 19;
 board_t = 5;
 border = 5;
-// row height multiplier for fn key row.
+// row/col multiplier for fn key row and magic keys.
 fn_key_fudge=1.5;
 
 // tab width
@@ -29,9 +29,13 @@ csa_width = 1.25;
 space_width = 3.0;
 right_shift_width = 1.75;
 
+enter_top_width = 1.5;
+enter_bottom_width = 1.25;
+magic_key_width = 1.5; // caps aren't this big, only the space on the board.
+
 keeb_depth = 20;
 
-font_name="MesloLGL Nerd Font";
+font_name="MesloLGL Nerd Font:style=Bold";
 
 module switch_hole() {
     // make a hold in the center
@@ -168,17 +172,40 @@ module key_cap(s1, s2, width) {
     }
 }
 
-module switch_hole_strip(n) {
-    for (i = [0:(n-1)]) {
-        translate([i*key_stride, 0, 0]) {
-            switch_hole();
+module switch_holes(widths, ltr, idx=undef) {
+    if (idx == undef) {
+        if (ltr) {
+            switch_holes(widths, ltr, idx=0);
+        } else {
+            switch_holes(widths, ltr, idx=len(widths)-1);
+        }
+    } else {
+        if (ltr && idx < len(widths)) {
+            w = widths[idx][0] == undef ? widths[idx] : widths[idx][0];
+            
+            if (widths[idx][0] == undef) {
+                translate([w * 0.5 * key_stride, 0, 0])
+                switch_hole();
+            }
+            translate([w * 1.0 * key_stride, 0, 0])
+            switch_holes(widths, ltr, idx+1);
+        }
+        if (!ltr && idx >= 0) {
+            w = widths[idx][0] == undef ? widths[idx] : widths[idx][0];
+            
+            if (widths[idx][0] == undef) {
+                translate([-w * 0.5 * key_stride, 0, 0])
+                switch_hole();
+            }
+            translate([-w * 1.0 * key_stride, 0, 0])
+            switch_holes(widths, ltr, idx-1);
         }
     }
 }
 
 module left_board() {
     rows = 6;
-    cols = 7.25;
+    cols = 8.75;
 
     cube([border, (rows + fn_key_fudge - 1) * key_stride + 2 * border, keeb_depth]);
     translate([
@@ -192,61 +219,31 @@ module left_board() {
             board_t
         ]);
     
-        // esc + f1-6
-        translate([
-            border + 0.5*key_stride,
-            border + 0.5*fn_key_fudge*key_stride,
-            0]) {
-            switch_hole_strip(7);
-        }
-        
-        // ` + 1-6
-        translate([
-            border + 0.5*key_stride,
-            border + (fn_key_fudge + 0.5)*key_stride,
-            0]) {
-            switch_hole_strip(7);
-        }
+        translate([border, 0, 0]) {
+            // esc + f1-6
+            translate([0, border + 0.5*fn_key_fudge*key_stride,0])
+            switch_holes([[magic_key_width], 1, 1, 1, 1, 1, 1, 1], true);
 
-        // tab + qwert row
-        translate([
-            border,
-            border + (fn_key_fudge + 1.5)*key_stride,
-            0]) {
-            translate([tab_width/2 * key_stride ,0,0])
-            switch_hole();
-            translate([(tab_width+0.5) * key_stride ,0,0]) 
-            switch_hole_strip(5);
-        }
+            // ` + 1-6
+            translate([0, border + (fn_key_fudge + 0.5)*key_stride,0])
+            switch_holes([magic_key_width, 1, 1, 1, 1, 1, 1, 1], true);
 
-        // capslock + asdfg row
-        translate([
-            border,
-            border + (fn_key_fudge + 2.5)*key_stride,
-            0]) {
-            translate([cl_width/2 * key_stride ,0,0]) switch_hole();
-            translate([(cl_width+0.5) * key_stride ,0,0]) switch_hole_strip(5);
-        }
-        // shift + \zxcvb
-        translate([
-            border,
-            border + (fn_key_fudge + 3.5)*key_stride,
-            0]) {
-            translate([shift_width/2 * key_stride ,0,0]) switch_hole();
-            translate([(shift_width+0.5) * key_stride ,0,0]) switch_hole_strip(6);
-        }
-        
-        // ctrl, super, alt, space
-        translate([
-            border,
-            border + (fn_key_fudge + 4.5)*key_stride,
-            0]) {
-            translate([csa_width*0.5 * key_stride ,0,0]) switch_hole();
-            translate([csa_width*1.5 * key_stride ,0,0]) switch_hole();
-            translate([csa_width*2.5 * key_stride ,0,0]) switch_hole();
-            translate([(csa_width*3.0 + space_width/2) * key_stride, 0, 0]) switch_hole();
-        }
+            // tab + qwert row
+            translate([0, border + (fn_key_fudge + 1.5)*key_stride,0])
+            switch_holes([magic_key_width, tab_width, 1, 1, 1, 1, 1], true);
 
+            // capslock + asdfg row
+            translate([0, border + (fn_key_fudge + 2.5)*key_stride,0])
+            switch_holes([magic_key_width, cl_width, 1, 1, 1, 1, 1], true);
+
+            // shift + \zxcvb
+            translate([0, border + (fn_key_fudge + 3.5)*key_stride,0])
+            switch_holes([magic_key_width, shift_width, 1, 1, 1, 1, 1, 1], true);
+
+            // ctrl, super, alt, space
+            translate([0, border + (fn_key_fudge + 4.5)*key_stride,0])
+            switch_holes([magic_key_width, csa_width, csa_width, csa_width, space_width], true);
+        }
     }
 }
 
@@ -265,69 +262,39 @@ module right_board() {
             (rows + fn_key_fudge - 1) * key_stride + 2 * border,
             board_t
         ]);
-        
-        // f6-12, vol +/0, del
-        translate([
-            border + 1.0*key_stride,
-            border + 0.5*fn_key_fudge*key_stride,
-            0]) {
-            switch_hole_strip(9);
-        }
 
-        // 7-0, -/+, backspace (2 wide), home
-        translate([
-            border + 1.0*key_stride,
-            border + (fn_key_fudge + 0.5)*key_stride,
-            0]) {
-            switch_hole_strip(6);
-            translate([6.5 * key_stride ,0,0]) switch_hole();
-            translate([8.0 * key_stride ,0,0]) switch_hole();
-        }
-        // yuiop[], enter-gap, end
-        translate([
-            border + 0.5*key_stride,
-            border + (fn_key_fudge + 1.5)*key_stride,
-            0]) {
-            switch_hole_strip(7);
-            translate([8.5 * key_stride ,0,0]) switch_hole();
-        }
-        
-        // enter
-        translate([
-            border + 7.875 * key_stride,
-            border + (fn_key_fudge + 2.0)*key_stride,
-            0])
-            switch_hole();
-        
-        
-        // hjkl;'#, enter-gap, pgup
-        translate([
-            border + 0.75*key_stride,
-            border + (fn_key_fudge + 2.5)*key_stride,
-            0]) {
-            switch_hole_strip(7);
-            translate([8.25 * key_stride ,0,0]) switch_hole();
-        }
-        
-        // nm,./, shift (1.75), up, pgdn
-        translate([
-            border + 1.25*key_stride,
-            border + (fn_key_fudge + 3.5)*key_stride,
-            0]) {
-            switch_hole_strip(5);
-            // todo - need a variable for right-shift width
-            translate([(5-1 + 6.75)/2 * key_stride ,0,0]) switch_hole();
-            translate([6.75 * key_stride ,0,0]) switch_hole();
-            translate([7.75 * key_stride ,0,0]) switch_hole();
-        }
-        
-        // space, alt, super, ctrl, left, down, right, 
-        translate([
-            border + (cols-6-space_width)*key_stride,
-            border + (fn_key_fudge + 4.5)*key_stride,
-            0]) {
-            translate([(space_width/2) * key_stride,0,0]) switch_hole();
-            translate([(space_width+0.5) * key_stride,0,0]) switch_hole_strip(6);
+        translate([border + cols * key_stride, 0, 0]) {
+
+            // f6-12, vol +/0, del
+            translate([0, border + 0.5*fn_key_fudge*key_stride, 0])
+            switch_holes([1, 1, 1, 1, 1, 1, 1, 1, 1], false);
+
+            // 7-0, -/+, backspace (2 wide), home
+            translate([0, border + (fn_key_fudge + 0.5)*key_stride, 0])
+            switch_holes([1, 1, 1, 1, 1, 1, 2, 1], false);
+
+            // yuiop[], enter-gap, end
+            translate([0, border + (fn_key_fudge + 1.5)*key_stride, 0])
+            switch_holes([1, 1, 1, 1, 1, 1, 1, [enter_top_width], 1], false);
+
+            // enter
+            translate([
+                -(1+enter_bottom_width/2)*key_stride,
+                border + (fn_key_fudge + 2.0)*key_stride,
+                0])
+                switch_hole();
+
+            // hjkl;'#, enter-gap, pgup
+            translate([0, border + (fn_key_fudge + 2.5)*key_stride, 0])
+            switch_holes([1, 1, 1, 1, 1, 1, 1, [enter_bottom_width], 1], false);
+
+            // nm,./, shift (1.75), up, pgdn
+            translate([0, border + (fn_key_fudge + 3.5)*key_stride, 0])
+            switch_holes([1,1,1,1,1, right_shift_width, 1, 1], false);
+
+            // space, alt, super, ctrl, left, down, right, 
+            translate([0, border + (fn_key_fudge + 4.5)*key_stride, 0])
+            switch_holes([space_width, 1, 1, 1, 1, 1, 1], false);
         }
     }
 }
@@ -355,21 +322,21 @@ module all_keys() {
     key_rows([
         [
             ["ESC"],
-            ["F1", "!"],
-            ["F2", "\""],
-            ["F3", "£"],
-            ["F4", "$"],
-            ["F5", "%"],
-            ["F6", "^"],
-            ["F7", "&"],
-            ["F8", "*"],
-            ["F9", "("],
-            ["F10", ")"],
-            ["F11", "_"],
-            ["F12", "+"],
-            ["\U00f027"],
-            ["\U00f028"],
-            ["del"]
+            ["\U0f12ab"],
+            ["\U0f12ac"],
+            ["\U0f12ad"],
+            ["\U0f12ae"],
+            ["\U0f12af"],
+            ["\U0f12b0"],
+            ["\U0f12b1"],
+            ["\U0f12b2"],
+            ["\U0f12b3"],
+            ["\U0f12b4"],
+            ["\U0f12b5"],
+            ["\U0f12b6"],
+            ["\U00f027"], // voldown
+            ["\U00f028"], // volup
+            ["Del"]
         ],    
         [
             ["`", "¬"],
@@ -386,7 +353,7 @@ module all_keys() {
             ["-", "_"],
             ["=", "+"],
             ["\U0f0b5c", undef, 2.0],
-            ["home"]
+            ["Home"]
         ], [
             ["\U0f0312", undef, tab_width],
             ["Q"],
@@ -401,7 +368,7 @@ module all_keys() {
             ["P"], 
             ["[", "}"], 
             ["]", "}"],
-            ["end"]
+            ["End"]
         ], [
             ["\U0f0632", undef, cl_width],
             ["A"],
@@ -416,7 +383,7 @@ module all_keys() {
             [";", ":"], 
             ["'", "@"], 
             ["#", "~"],
-            ["pgup"]
+            ["PgUp"]
         ], [
             ["\U0f0636", undef, shift_width],
             ["\\", "|"],
@@ -431,27 +398,27 @@ module all_keys() {
             [".", ">"], 
             ["/", "?"],
             ["\U0f0636", undef, right_shift_width],
-            ["\U00f062", undef],
-            ["pgdn"]
+            ["\U00eaa1", undef], // up
+            ["PgDn"]
         ], [
-            ["CTRL", undef, csa_width],
-            ["SUP", undef, csa_width],
-            ["ALT", undef, csa_width],
+            ["Ctrl", undef, csa_width],
+            ["\U00e712", undef, csa_width], // super
+            ["Alt", undef, csa_width],
             ["", undef, space_width],
             ["", undef, space_width],
-            ["ALT", undef],
-            ["SUP", undef],
-            ["CTRL", undef],
-            ["\U00f060", undef],
-            ["\U00f063", undef],
-            ["\U00f061", undef]
+            ["Alt", undef],
+            ["\U00e712", undef],
+            ["Ctrl", undef],
+            ["\U00ea9b", undef], // left
+            ["\U00ea9a", undef], // down
+            ["\U00ea9c", undef] // right
         ]
     ]);
 }
 
 left_board();
 
-translate([8*key_stride + border*2, 0, 0]) right_board();
+translate([9*key_stride + border*2, 0, 0]) right_board();
 
 translate([0, -2 * key_stride, 0]) all_keys();
 
