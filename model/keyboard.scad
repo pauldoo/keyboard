@@ -2,7 +2,7 @@
 
 
 $fs = 0.1;
-$fa = 1;
+$fa = 5;
 
 // width of a key face
 key_face_d = 15;
@@ -61,13 +61,14 @@ module key_face(s1, s2=undef, width=1.0, bump=false) {
             
             po = (s2 != undef) ? -0.125 : 0;
             base_font_size = (s2 != undef) ? 7 : 12;
-            
-            translate([0, key_face_d*po, key_face_t - 0.5]) {
-                linear_extrude(height=key_face_t, center=true) {
-                    ts = base_font_size/max(2, len(s1));
-                    text(s1, size=ts,
-                        font=font_name, 
-                        halign="center", valign="center");
+            if (s1 != undef) {
+                translate([0, key_face_d*po, key_face_t - 0.5]) {
+                    linear_extrude(height=key_face_t, center=true) {
+                        ts = base_font_size/max(2, len(s1));
+                        text(s1, size=ts,
+                            font=font_name, 
+                            halign="center", valign="center");
+                    }
                 }
             }
 
@@ -177,23 +178,34 @@ module key_cap(s1, s2, width, bump) {
 }
 
 module enter_key() {
-    // Just magic, not a lot of code shared with other keys.
-    
-    translate([0, 0, stem_l]) {
-        cube([key_face_d + key_stride * (enter_top_width-1), key_face_d, key_face_t]);
-        
-        translate([(enter_top_width - enter_bottom_width)*key_stride, -key_stride, 0])
-        cube([key_face_d + key_stride * (enter_bottom_width-1), key_face_d + key_stride, key_face_t]);
+    // Bodge...
+    // Simply take the union of a bunch of keys, then fixup space for the stem.
+
+    difference() {
+        union() {
+            translate([-(enter_top_width-enter_bottom_width)*key_stride/2, key_stride/2, 0])
+            key_cap("\U0f0311", width=enter_top_width);
+         
+            translate([0, -key_stride/2, 0])   
+            key_cap(undef, width=enter_bottom_width);
+
+            key_cap(undef, width=enter_bottom_width);
+        }
+        //sphere(r=10);
+        cutout_x = key_face_d + (enter_bottom_width-1) * key_stride - 2;
+        cutout_y = key_face_d + key_stride - 2;
+        translate([
+            -cutout_x / 2, 
+            -cutout_y / 2, 
+            0])
+        cube([
+            cutout_x, 
+            cutout_y,
+            stem_l]);
     }
     
-    translate([
-        key_face_d/2 + (enter_top_width-1 - (enter_bottom_width-1)/2)*key_stride,
-        (key_face_d - key_stride)/2,
-        0])
-    stem(); 
-    
-    // TODO: enter key walls. :(
-}
+    stem();
+ }
 
 module switch_holes(widths, ltr, idx=undef) {
     if (idx == undef) {
