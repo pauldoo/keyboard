@@ -334,29 +334,27 @@ module right_board() {
     }
 }
 
-module key_row(labels, idx) {
+module key_rows(labels, idx=0, cumulative_width=0, max_width=200) {
     if (idx < len(labels)) {
         width = len(labels[idx]) < 3 ? 1.0 : labels[idx][2];
         bump = len(labels[idx]) < 4 ? false : labels[idx][3];
-        translate([key_stride * width / 2, 0, 0])
-        key_cap(labels[idx][0], labels[idx][1], width, bump);
-        
-        translate([key_stride * width, 0, 0])
-        key_row(labels, idx+1);
-    }
-}
 
-module key_rows(labels_list) {
-    for (j = [0 : len(labels_list)-1]) {
-        labels = labels_list[j];
-        translate([0, -key_stride *j, 0])
-        key_row(labels, 0);
+        cw = cumulative_width + key_stride*width;
+        if (cw >= max_width) {
+            translate([0, -key_stride, 0])
+            key_rows(labels, idx, 0, max_width);
+        } else {
+
+            translate([cumulative_width + key_stride * width / 2, 0, 0])
+            key_cap(labels[idx][0], labels[idx][1], width, bump);
+            
+            key_rows(labels, idx+1, cw, max_width);
+        }
     }
 }
 
 module all_keys() {
     key_rows([
-        [
             ["ESC"],
             ["\U0f12ab"],
             ["\U0f12ac"],
@@ -372,9 +370,8 @@ module all_keys() {
             ["\U0f12b6"],
             ["\U00f027"], // voldown
             ["\U00f028"], // volup
-            ["Del"]
-        ],    
-        [
+            ["Del"],
+
             ["\U0f0bed"],
             ["`", "¬"],
             ["1", "!"],
@@ -390,8 +387,8 @@ module all_keys() {
             ["-", "_"],
             ["=", "+"],
             ["\U0f0b5c", undef, 2.0],
-            ["Home"]
-        ], [
+            ["Home"],
+
             ["\U0f0bf0"],
             ["\U0f0312", undef, tab_width],
             ["Q"],
@@ -406,8 +403,8 @@ module all_keys() {
             ["P"], 
             ["[", "}"], 
             ["]", "}"],
-            ["End"]
-        ], [
+            ["End"],
+
             ["\U0f0bf3"],
             ["\U0f0632", undef, cl_width],
             ["A"],
@@ -422,8 +419,8 @@ module all_keys() {
             [";", ":"], 
             ["'", "@"], 
             ["#", "~"],
-            ["PgUp"]
-        ], [
+            ["PgUp"],
+
             ["\U0f0bf6"],
             ["\U0f0636", undef, shift_width],
             ["\\", "|"],
@@ -439,8 +436,8 @@ module all_keys() {
             ["/", "?"],
             ["\U0f0636", undef, right_shift_width],
             ["\U00eaa1", undef], // up
-            ["PgDn"]
-        ], [
+            ["PgDn"],
+
             ["\U0f0bf9"],
             ["Ctrl", undef, csa_width],
             ["\U00e712", undef, csa_width], // super
@@ -453,7 +450,6 @@ module all_keys() {
             ["\U00ea9b", undef], // left
             ["\U00ea9a", undef], // down
             ["\U00ea9c", undef] // right
-        ]
     ]);
 }
 
@@ -463,5 +459,5 @@ translate([9*key_stride + border*2, 0, 0]) right_board();
 
 translate([0, -2 * key_stride, 0]) all_keys();
 
-translate([0, -9 * key_stride, 0]) enter_key();
+translate([-1*key_stride, 0, 0]) enter_key();
 
