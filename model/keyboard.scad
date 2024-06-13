@@ -100,7 +100,7 @@ module chorner(r, d) {
 
 module stem() {
     depth = stem_l + 1; // socket has 4mm depth
-    width = 5.6; // 5.5 is basically perfect, minute wobble..? // 6; // 5
+    width = 5.5; // 5.5 is basically perfect, minute wobble..? // 6; // 5
     cross_t = 1.5; // 1.25; // 1
     cross_d = 4.25; // 4; // 3
     round_r = 1.25; // 1
@@ -334,7 +334,7 @@ module right_board() {
     }
 }
 
-module key_rows(labels, idx=0, cumulative_width=0, max_width=200) {
+module key_rows(labels, idx=0, cumulative_width=0, max_width=180) {
     if (idx < len(labels)) {
         width = len(labels[idx]) < 3 ? 1.0 : labels[idx][2];
         bump = len(labels[idx]) < 4 ? false : labels[idx][3];
@@ -353,27 +353,16 @@ module key_rows(labels, idx=0, cumulative_width=0, max_width=200) {
     }
 }
 
-module all_keys() {
+module yellow_keys() {
     key_rows([
-            ["ESC"],
             ["\U0f12ab"],
             ["\U0f12ac"],
             ["\U0f12ad"],
             ["\U0f12ae"],
-            ["\U0f12af"],
-            ["\U0f12b0"],
-            ["\U0f12b1"],
-            ["\U0f12b2"],
             ["\U0f12b3"],
             ["\U0f12b4"],
             ["\U0f12b5"],
             ["\U0f12b6"],
-            ["\U00f027"], // voldown
-            ["\U00f028"], // volup
-            ["Del"],
-
-            ["\U0f0bed"],
-            ["`", "¬"],
             ["1", "!"],
             ["2", "\""],
             ["3", "£"],
@@ -386,11 +375,6 @@ module all_keys() {
             ["0", ")"],
             ["-", "_"],
             ["=", "+"],
-            ["\U0f0b5c", undef, 2.0],
-            ["Home"],
-
-            ["\U0f0bf0"],
-            ["\U0f0312", undef, tab_width],
             ["Q"],
             ["W"],
             ["E"],
@@ -403,10 +387,6 @@ module all_keys() {
             ["P"], 
             ["[", "}"], 
             ["]", "}"],
-            ["End"],
-
-            ["\U0f0bf3"],
-            ["\U0f0632", undef, cl_width],
             ["A"],
             ["S"],
             ["D"],
@@ -419,10 +399,6 @@ module all_keys() {
             [";", ":"], 
             ["'", "@"], 
             ["#", "~"],
-            ["PgUp"],
-
-            ["\U0f0bf6"],
-            ["\U0f0636", undef, shift_width],
             ["\\", "|"],
             ["Z"],
             ["X"],
@@ -434,8 +410,40 @@ module all_keys() {
             [",", "<"],
             [".", ">"], 
             ["/", "?"],
-            ["\U0f0636", undef, right_shift_width],
             ["\U00eaa1", undef], // up
+            ["\U00ea9b", undef], // left
+            ["\U00ea9a", undef], // down
+            ["\U00ea9c", undef] // right
+    ]);
+}
+
+module blue_keys() {
+    key_rows([
+            ["ESC"],
+            ["\U0f12af"],
+            ["\U0f12b0"],
+            ["\U0f12b1"],
+            ["\U0f12b2"],
+            ["\U00f027"], // voldown
+            ["\U00f028"], // volup
+            ["Del"],
+
+            ["\U0f0bed"],
+            ["`", "¬"],
+            ["\U0f0b5c", undef, 2.0],
+            ["Home"],
+
+            ["\U0f0bf0"],
+            ["\U0f0312", undef, tab_width],
+            ["End"],
+
+            ["\U0f0bf3"],
+            ["\U0f0632", undef, cl_width],
+            ["PgUp"],
+
+            ["\U0f0bf6"],
+            ["\U0f0636", undef, shift_width],
+            ["\U0f0636", undef, right_shift_width],
             ["PgDn"],
 
             ["\U0f0bf9"],
@@ -447,9 +455,6 @@ module all_keys() {
             ["Alt", undef],
             ["\U00e712", undef],
             ["Ctrl", undef],
-            ["\U00ea9b", undef], // left
-            ["\U00ea9a", undef], // down
-            ["\U00ea9c", undef] // right
     ]);
 }
 
@@ -457,7 +462,8 @@ left_board();
 
 translate([9*key_stride + border*2, 0, 0]) right_board();
 
-translate([0, -2 * key_stride, 0]) all_keys();
+translate([0, -2 * key_stride, 0]) blue_keys();
+translate([0, -8 * key_stride, 0]) yellow_keys();
 
-translate([-1*key_stride, 0, 0]) enter_key();
+translate([-1*key_stride, -3*key_stride, 0]) enter_key();
 
