@@ -32,6 +32,7 @@ use rp_pico::hal::pac;
 // higher-level drivers.
 use rp_pico::hal;
 
+use rp_pico::hal::Timer;
 use usb_device::{class_prelude::*, prelude::*};
 
 // USB Human Interface Device (HID) Class support
@@ -42,6 +43,10 @@ use usbd_hid::hid_class::HIDClass;
 
 // The macro for marking our interrupt functions
 use rp_pico::hal::pac::interrupt;
+use usbd_hid::hid_class::HidCountryCode;
+use usbd_hid::hid_class::HidProtocol;
+use usbd_hid::hid_class::HidSubClass;
+use usbd_hid::hid_class::ProtocolModeConfig;
 
 mod debounce;
 mod key_table;
@@ -62,6 +67,8 @@ static mut USB_DEVICE: Option<UsbDevice<hal::usb::UsbBus>> = None;
 
 /// The USB Human Interface Device Driver (shared with the interrupt).
 static mut USB_HID: Option<HIDClass<hal::usb::UsbBus>> = None;
+
+const POLL_PERIOD_MS: u8 = 5;
 
 /// Entry point to our bare-metal application.
 ///
@@ -94,6 +101,18 @@ fn main() -> ! {
     .ok()
     .unwrap();
 
+    // The single-cycle I/O block controls our GPIO pins
+    let sio = hal::Sio::new(pac.SIO);
+
+    // Set the pins up according to their function on this particular board
+    let pins = rp_pico::Pins::new(
+        pac.IO_BANK0,
+        pac.PADS_BANK0,
+        sio.gpio_bank0,
+        &mut pac.RESETS,
+    );
+    let _timer = Timer::new(pac.TIMER, &mut pac.RESETS, &clocks);
+    
     {
         // Set up the USB driver
         let usb_bus = UsbBusAllocator::new(hal::usb::UsbBus::new(
@@ -110,7 +129,17 @@ fn main() -> ! {
     {
         let bus_ref = unsafe { USB_BUS.as_ref().unwrap() };
         // Set up the USB HID Class Device driver, providing Keyboard Reports
-        let usb_hid = HIDClass::new(bus_ref, KeyboardReport::desc(), 10u8);
+        let usb_hid = HIDClass::new_with_settings(
+            bus_ref,
+            KeyboardReport::desc(),
+            POLL_PERIOD_MS,
+            usbd_hid::hid_class::HidClassSettings {
+                subclass: HidSubClass::NoSubClass,
+                protocol: HidProtocol::Keyboard,
+                config: ProtocolModeConfig::ForceReport,
+                locale: HidCountryCode::UK,
+            },
+        );
         unsafe { USB_HID = Some(usb_hid) }
     }
     {
@@ -134,16 +163,6 @@ fn main() -> ! {
     // milliseconds)
     let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
 
-    // The single-cycle I/O block controls our GPIO pins
-    let sio = hal::Sio::new(pac.SIO);
-
-    // Set the pins up according to their function on this particular board
-    let pins = rp_pico::Pins::new(
-        pac.IO_BANK0,
-        pac.PADS_BANK0,
-        sio.gpio_bank0,
-        &mut pac.RESETS,
-    );
 
     // Set the LED to be an output
     let mut led_pin = pins.led.into_push_pull_output();
@@ -177,13 +196,17 @@ fn main() -> ! {
         &mut pins.gpio16.into_pull_down_input().into_dyn_pin(),
     ];
 
-    unsafe {
-        // Enable the USB interrupt
-        pac::NVIC::unmask(hal::pac::Interrupt::USBCTRL_IRQ);
-    };
+    if true {
+        unsafe {
+            // Enable the USB interrupt
+            pac::NVIC::unmask(hal::pac::Interrupt::USBCTRL_IRQ);
+        };
+    }
+
+    led_pin.set_low().unwrap();
+    delay.delay_ms(3_000);
 
     release_all_keys();
-    led_pin.set_low().unwrap();
 
     let mut debounce_states = [[DebounceState::default(); KEY_COLUMNS]; KEY_ROWS];
 
@@ -224,12 +247,21 @@ fn main() -> ! {
         } else {
             led_pin.set_low().unwrap();
         }
-        if !report_eq(&report, &previous_report) {
+        if !report_eq(&previous_report, &report) {
             send_report(&report);
             previous_report = report;
         }
 
-        delay.delay_ms(1);
+        if false {
+            critical_section::with(|_| unsafe {
+                let usb_hid = USB_HID.as_mut().unwrap();
+            
+                let mut buf = [0; 64];
+                usb_hid.pull_raw_report(&mut buf);
+            });
+        }
+
+        delay.delay_ms(POLL_PERIOD_MS.into());
     }
 }
 
@@ -259,11 +291,12 @@ fn release_all_keys() {
 }
 
 fn send_report(report: &KeyboardReport) -> () {
-    critical_section::with(|_| unsafe {
-        let usb_hid = USB_HID.as_mut().unwrap();
-        usb_hid.push_input(report).unwrap();
-    });
+    let _ = critical_section::with(|_| unsafe {
+        USB_HID.as_mut().map(|hid| hid.push_input(report))
+    })
+    .unwrap();
 }
+
 
 /// This function is called whenever the USB Hardware generates an Interrupt
 /// Request.
@@ -273,9 +306,5 @@ unsafe fn USBCTRL_IRQ() {
     // Handle USB request
     let usb_dev = USB_DEVICE.as_mut().unwrap();
     let usb_hid = USB_HID.as_mut().unwrap();
-    while usb_dev.poll(&mut [usb_hid]) {
-        let mut buf = [0; 64];
-        usb_hid.pull_raw_report(&mut buf);
-        // TODO: something with the report.. ?
-    }
+    usb_dev.poll(&mut [usb_hid]);
 }
