@@ -1,46 +1,46 @@
-use crate::{KeyAction, KEY_COLUMNS, KEY_ROWS};
+use crate::{KEY_COLUMNS, KEY_ROWS};
 
-use usbd_hid::descriptor::KeyboardUsage;
-use KeyAction::{Letter, Nothing};
+use usbd_human_interface_device::page::Keyboard;
+use Keyboard::NoEventIndicated;
 
-pub(crate) const KEY_MAPPING: [[KeyAction; KEY_COLUMNS]; KEY_ROWS] = [
+pub(crate) const KEY_MAPPING: [[Keyboard; KEY_COLUMNS]; KEY_ROWS] = [
     [
-        Letter(KeyboardUsage::KeyboardAa), //
-        Letter(KeyboardUsage::KeyboardBb), //
-        Letter(KeyboardUsage::KeyboardCc), //
-        Nothing,                           //
-        Nothing,                           //
-        Nothing,                           //
-        Nothing,                           //
-        Nothing,                           //
-        Nothing,                           //
-        Nothing,                           //
-        Nothing,                           //
-        Nothing,                           //
-        Nothing,                           //
-        Nothing,                           //
-        Nothing,                           //
-        Nothing,                           //
-        Nothing,
+        Keyboard::A, //
+        Keyboard::B, //
+        Keyboard::C, //
+        NoEventIndicated,              //
+        NoEventIndicated,              //
+        NoEventIndicated,              //
+        NoEventIndicated,              //
+        NoEventIndicated,              //
+        NoEventIndicated,              //
+        NoEventIndicated,              //
+        NoEventIndicated,              //
+        NoEventIndicated,              //
+        NoEventIndicated,              //
+        NoEventIndicated,              //
+        NoEventIndicated,              //
+        NoEventIndicated,              //
+        NoEventIndicated,
     ],
     [
-        Nothing, Nothing, Nothing, Nothing, Nothing, Nothing, Nothing, Nothing, Nothing, Nothing,
-        Nothing, Nothing, Nothing, Nothing, Nothing, Nothing, Nothing,
+        NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated,
+        NoEventIndicated, NoEventIndicated,
     ],
     [
-        Nothing, Nothing, Nothing, Nothing, Nothing, Nothing, Nothing, Nothing, Nothing, Nothing,
-        Nothing, Nothing, Nothing, Nothing, Nothing, Nothing, Nothing,
+        NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated,
+        NoEventIndicated, NoEventIndicated,
     ],
     [
-        Nothing, Nothing, Nothing, Nothing, Nothing, Nothing, Nothing, Nothing, Nothing, Nothing,
-        Nothing, Nothing, Nothing, Nothing, Nothing, Nothing, Nothing,
+        NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated,
+        NoEventIndicated, NoEventIndicated,
     ],
     [
-        Nothing, Nothing, Nothing, Nothing, Nothing, Nothing, Nothing, Nothing, Nothing, Nothing,
-        Nothing, Nothing, Nothing, Nothing, Nothing, Nothing, Nothing,
+        NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated,
+        NoEventIndicated, NoEventIndicated,
     ],
     [
-        Nothing, Nothing, Nothing, Nothing, Nothing, Nothing, Nothing, Nothing, Nothing, Nothing,
-        Nothing, Nothing, Nothing, Nothing, Nothing, Nothing, Nothing,
+        NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated, NoEventIndicated,
+        NoEventIndicated, NoEventIndicated,
     ],
 ];

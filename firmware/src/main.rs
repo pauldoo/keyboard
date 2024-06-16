@@ -2,11 +2,15 @@
 #![no_main]
 
 use cortex_m::delay::Delay;
+use cortex_m::prelude::*;
+
 use debounce::DebounceState;
 use embedded_hal::digital::InputPin;
 use key_table::KEY_MAPPING;
 // The macro for our start-up function
 use rp_pico::entry;
+
+use fugit::ExtU32;
 
 // GPIO traits
 use embedded_hal::digital::OutputPin;
@@ -35,40 +39,20 @@ use rp_pico::hal;
 use rp_pico::hal::Timer;
 use usb_device::{class_prelude::*, prelude::*};
 
-// USB Human Interface Device (HID) Class support
-use usbd_hid::descriptor::generator_prelude::*;
-use usbd_hid::descriptor::KeyboardReport;
-use usbd_hid::descriptor::KeyboardUsage;
-use usbd_hid::hid_class::HIDClass;
-
-// The macro for marking our interrupt functions
-use rp_pico::hal::pac::interrupt;
-use usbd_hid::hid_class::HidCountryCode;
-use usbd_hid::hid_class::HidProtocol;
-use usbd_hid::hid_class::HidSubClass;
-use usbd_hid::hid_class::ProtocolModeConfig;
+use usbd_human_interface_device::prelude::*;
+use usbd_human_interface_device::device::keyboard::NKROBootKeyboardConfig;
+use usbd_human_interface_device::page::Keyboard;
 
 mod debounce;
 mod key_table;
 
-enum KeyAction {
-    Nothing,
-    Letter(KeyboardUsage),
-}
-
 pub(crate) const KEY_ROWS: usize = 6;
 pub(crate) const KEY_COLUMNS: usize = 17;
 
-/// The USB Bus Driver (shared with the interrupt).
-static mut USB_BUS: Option<UsbBusAllocator<hal::usb::UsbBus>> = None;
-
-/// The USB Device Driver (shared with the interrupt).
-static mut USB_DEVICE: Option<UsbDevice<hal::usb::UsbBus>> = None;
-
-/// The USB Human Interface Device Driver (shared with the interrupt).
-static mut USB_HID: Option<HIDClass<hal::usb::UsbBus>> = None;
-
-const POLL_PERIOD_MS: u8 = 5;
+/// Period for polling for USB I/O.
+const TICK_PERIOD_MS: u32 = 1;
+/// Period between scans for key presses.
+const SCAN_PERIOD_MS: u32 = 5;
 
 /// Entry point to our bare-metal application.
 ///
@@ -101,6 +85,8 @@ fn main() -> ! {
     .ok()
     .unwrap();
 
+    let timer = Timer::new(pac.TIMER, &mut pac.RESETS, &clocks);
+
     // The single-cycle I/O block controls our GPIO pins
     let sio = hal::Sio::new(pac.SIO);
 
@@ -111,63 +97,33 @@ fn main() -> ! {
         sio.gpio_bank0,
         &mut pac.RESETS,
     );
-    let _timer = Timer::new(pac.TIMER, &mut pac.RESETS, &clocks);
-    
-    {
-        // Set up the USB driver
-        let usb_bus = UsbBusAllocator::new(hal::usb::UsbBus::new(
-            pac.USBCTRL_REGS,
-            pac.USBCTRL_DPRAM,
-            clocks.usb_clock,
-            true,
-            &mut pac.RESETS,
-        ));
-        unsafe {
-            USB_BUS = Some(usb_bus);
-        }
-    }
-    {
-        let bus_ref = unsafe { USB_BUS.as_ref().unwrap() };
-        // Set up the USB HID Class Device driver, providing Keyboard Reports
-        let usb_hid = HIDClass::new_with_settings(
-            bus_ref,
-            KeyboardReport::desc(),
-            POLL_PERIOD_MS,
-            usbd_hid::hid_class::HidClassSettings {
-                subclass: HidSubClass::NoSubClass,
-                protocol: HidProtocol::Keyboard,
-                config: ProtocolModeConfig::ForceReport,
-                locale: HidCountryCode::UK,
-            },
-        );
-        unsafe { USB_HID = Some(usb_hid) }
-    }
-    {
-        let bus_ref = unsafe { USB_BUS.as_ref().unwrap() };
-        // Create a USB device with a fake VID and PID
-        let usb_dev = UsbDeviceBuilder::new(bus_ref, UsbVidPid(0x16c0, 0x27da))
-            .strings(&[StringDescriptors::default()
-                .manufacturer("Paul")
-                .product("Crappy")
-                .serial_number("123")])
-            .unwrap()
-            .device_class(0)
-            .build();
-        unsafe {
-            // Note (safety): This is safe as interrupts haven't been started yet
-            USB_DEVICE = Some(usb_dev);
-        }
-    }
+
+    // Set up the USB driver
+    let usb_bus = UsbBusAllocator::new(hal::usb::UsbBus::new(
+        pac.USBCTRL_REGS,
+        pac.USBCTRL_DPRAM,
+        clocks.usb_clock,
+        true,
+        &mut pac.RESETS,
+    ));
+
+    let mut keyboard = UsbHidClassBuilder::new()
+        .add_device(NKROBootKeyboardConfig::default())
+        .build(&usb_bus);
+
+    let mut usb_dev = UsbDeviceBuilder::new(&usb_bus, UsbVidPid(0x1209, 0x0001))
+        .strings(&[StringDescriptors::default().product("Crappy Keyboard")])
+        .unwrap()
+        .build();
 
     // The delay object lets us wait for specified amounts of time (in
     // milliseconds)
     let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
 
-
     // Set the LED to be an output
     let mut led_pin = pins.led.into_push_pull_output();
 
-    let row_pins: [&mut Pin<DynPinId, FunctionSio<SioOutput>, PullDown>; KEY_ROWS] = [
+    let mut row_pins: [&mut Pin<DynPinId, FunctionSio<SioOutput>, PullDown>; KEY_ROWS] = [
         &mut pins.gpio17.into_push_pull_output().into_dyn_pin(),
         &mut pins.gpio18.into_push_pull_output().into_dyn_pin(),
         &mut pins.gpio19.into_push_pull_output().into_dyn_pin(),
@@ -176,7 +132,7 @@ fn main() -> ! {
         &mut pins.gpio22.into_push_pull_output().into_dyn_pin(),
     ];
 
-    let column_pins: [&mut Pin<DynPinId, FunctionSio<SioInput>, PullDown>; KEY_COLUMNS] = [
+    let mut column_pins: [&mut Pin<DynPinId, FunctionSio<SioInput>, PullDown>; KEY_COLUMNS] = [
         &mut pins.gpio0.into_pull_down_input().into_dyn_pin(),
         &mut pins.gpio1.into_pull_down_input().into_dyn_pin(),
         &mut pins.gpio2.into_pull_down_input().into_dyn_pin(),
@@ -196,115 +152,71 @@ fn main() -> ! {
         &mut pins.gpio16.into_pull_down_input().into_dyn_pin(),
     ];
 
-    if true {
-        unsafe {
-            // Enable the USB interrupt
-            pac::NVIC::unmask(hal::pac::Interrupt::USBCTRL_IRQ);
-        };
-    }
-
     led_pin.set_low().unwrap();
-    delay.delay_ms(3_000);
 
-    release_all_keys();
+    let mut debounce_states: [[DebounceState; KEY_COLUMNS]; KEY_ROWS] = [[DebounceState::default(); KEY_COLUMNS]; KEY_ROWS];
 
-    let mut debounce_states = [[DebounceState::default(); KEY_COLUMNS]; KEY_ROWS];
+    let mut tick_count_down = timer.count_down();
+    tick_count_down.start(TICK_PERIOD_MS.millis());
 
-    let mut previous_report = KeyboardReport::default();
+    let mut scan_count_down = timer.count_down();
+    scan_count_down.start(SCAN_PERIOD_MS.millis());
 
-    let mut cycle_count = 0u64;
+    // Way more than we ever need.
+    let mut report_buffer: [Keyboard; 200] = [Keyboard::NoEventIndicated; 200];
 
     loop {
-        if false {
-            if (cycle_count / 100) % 2 == 0 {
-                led_pin.set_high().unwrap();
-            } else {
-                led_pin.set_low().unwrap();
-            }
+        if tick_count_down.wait().is_ok() {
+            let _ = keyboard.tick();
         }
-        cycle_count += 1;
 
-        let mut report: KeyboardReport = KeyboardReport::default();
-        let mut something_pressed = false;
+        if scan_count_down.wait().is_ok() {
+            let report: &[Keyboard] = scan_keys(
+                &mut row_pins, &mut column_pins, &mut delay, &mut debounce_states, &mut report_buffer);
+            
+            if report.is_empty() {
+                led_pin.set_low().unwrap()
+            } else {
+                led_pin.set_high().unwrap()
+            }
 
-        for row_idx in 0..KEY_ROWS {
-            row_pins[row_idx].set_high().unwrap();
-            delay.delay_us(1);
-            for col_idx in 0..KEY_COLUMNS {
+            let _ = keyboard.device().write_report(report.iter().copied());
+        }
+
+        if usb_dev.poll(&mut [&mut keyboard]) {
+            let _ = keyboard.device().read_report().map(|_leds| {});
+        }
+    }
+}
+
+fn scan_keys<'a>(
+    row_pins: &mut [&mut Pin<DynPinId, FunctionSio<SioOutput>, PullDown>; KEY_ROWS],
+    column_pins: &mut [&mut Pin<DynPinId, FunctionSio<SioInput>, PullDown>; KEY_COLUMNS],
+    delay: &mut Delay,
+    debounce_states: &mut [[DebounceState; KEY_COLUMNS]; KEY_ROWS],
+    buffer: &'a mut [Keyboard]
+) -> &'a [Keyboard] {
+
+    let mut out_idx: usize = 0;
+
+    assert_eq!(KEY_MAPPING.len(), row_pins.len());
+    for (row_idx, row_mapping) in KEY_MAPPING.iter().enumerate() {
+        row_pins[row_idx].set_high().unwrap();
+        delay.delay_us(1);
+
+        assert_eq!(row_mapping.len(), column_pins.len());
+        for (col_idx, key) in row_mapping.iter().enumerate() {
+            if *key != Keyboard::NoEventIndicated {
                 let input = column_pins[col_idx].is_high().unwrap();
 
                 let is_depressed = debounce_states[row_idx][col_idx].update(input);
                 if is_depressed {
-                    something_pressed = true;
-                    enact_action(&KEY_MAPPING[row_idx][col_idx], &mut report);
-                }
-            }
-            row_pins[row_idx].set_low().unwrap();
-        }
-
-        if something_pressed {
-            led_pin.set_high().unwrap();
-        } else {
-            led_pin.set_low().unwrap();
-        }
-        if !report_eq(&previous_report, &report) {
-            send_report(&report);
-            previous_report = report;
-        }
-
-        if false {
-            critical_section::with(|_| unsafe {
-                let usb_hid = USB_HID.as_mut().unwrap();
-            
-                let mut buf = [0; 64];
-                usb_hid.pull_raw_report(&mut buf);
-            });
-        }
-
-        delay.delay_ms(POLL_PERIOD_MS.into());
-    }
-}
-
-fn enact_action(key: &KeyAction, report: &mut KeyboardReport) {
-    match key {
-        KeyAction::Nothing => {}
-        KeyAction::Letter(usage) => {
-            for i in 0..report.keycodes.len() {
-                if report.keycodes[i] == 0 {
-                    report.keycodes[i] = *usage as u8;
-                    break;
+                    buffer[out_idx] = *key;
+                    out_idx += 1;
                 }
             }
         }
     }
-}
 
-fn report_eq(left: &KeyboardReport, right: &KeyboardReport) -> bool {
-    left.modifier == right.modifier
-        && left.reserved == right.reserved
-        && left.leds == right.leds
-        && left.keycodes == right.keycodes
-}
-
-fn release_all_keys() {
-    send_report(&KeyboardReport::default());
-}
-
-fn send_report(report: &KeyboardReport) -> () {
-    let _ = critical_section::with(|_| unsafe {
-        USB_HID.as_mut().map(|hid| hid.push_input(report))
-    })
-    .unwrap();
-}
-
-
-/// This function is called whenever the USB Hardware generates an Interrupt
-/// Request.
-#[allow(non_snake_case)]
-#[interrupt]
-unsafe fn USBCTRL_IRQ() {
-    // Handle USB request
-    let usb_dev = USB_DEVICE.as_mut().unwrap();
-    let usb_hid = USB_HID.as_mut().unwrap();
-    usb_dev.poll(&mut [usb_hid]);
+    &buffer[..out_idx]
 }
