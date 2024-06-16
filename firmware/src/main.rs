@@ -39,9 +39,9 @@ use rp_pico::hal;
 use rp_pico::hal::Timer;
 use usb_device::{class_prelude::*, prelude::*};
 
-use usbd_human_interface_device::prelude::*;
 use usbd_human_interface_device::device::keyboard::NKROBootKeyboardConfig;
 use usbd_human_interface_device::page::Keyboard;
+use usbd_human_interface_device::prelude::*;
 
 mod debounce;
 mod key_table;
@@ -154,7 +154,8 @@ fn main() -> ! {
 
     led_pin.set_low().unwrap();
 
-    let mut debounce_states: [[DebounceState; KEY_COLUMNS]; KEY_ROWS] = [[DebounceState::default(); KEY_COLUMNS]; KEY_ROWS];
+    let mut debounce_states: [[DebounceState; KEY_COLUMNS]; KEY_ROWS] =
+        [[DebounceState::default(); KEY_COLUMNS]; KEY_ROWS];
 
     let mut tick_count_down = timer.count_down();
     tick_count_down.start(TICK_PERIOD_MS.millis());
@@ -167,24 +168,43 @@ fn main() -> ! {
 
     loop {
         if tick_count_down.wait().is_ok() {
-            let _ = keyboard.tick();
+            match keyboard.tick() {
+                Ok(_) => {}
+                Err(UsbHidError::WouldBlock) => {}
+                Err(UsbHidError::Duplicate) => {}
+                Err(_) => panic!("Keyboard tick failure."),
+            }
         }
 
         if scan_count_down.wait().is_ok() {
             let report: &[Keyboard] = scan_keys(
-                &mut row_pins, &mut column_pins, &mut delay, &mut debounce_states, &mut report_buffer);
-            
+                &mut row_pins,
+                &mut column_pins,
+                &mut delay,
+                &mut debounce_states,
+                &mut report_buffer,
+            );
+
             if report.is_empty() {
                 led_pin.set_low().unwrap()
             } else {
                 led_pin.set_high().unwrap()
             }
 
-            let _ = keyboard.device().write_report(report.iter().copied());
+            match keyboard.device().write_report(report.iter().copied()) {
+                Ok(_) => {}
+                Err(UsbHidError::WouldBlock) => {}
+                Err(UsbHidError::Duplicate) => {}
+                Err(_) => panic!("Keyboard write failure."),
+            }
         }
 
         if usb_dev.poll(&mut [&mut keyboard]) {
-            let _ = keyboard.device().read_report().map(|_leds| {});
+            match keyboard.device().read_report() {
+                Ok(_leds) => {}
+                Err(UsbError::WouldBlock) => {}
+                Err(_) => panic!("Keyboard read failure."),
+            }
         }
     }
 }
@@ -194,9 +214,8 @@ fn scan_keys<'a>(
     column_pins: &mut [&mut Pin<DynPinId, FunctionSio<SioInput>, PullDown>; KEY_COLUMNS],
     delay: &mut Delay,
     debounce_states: &mut [[DebounceState; KEY_COLUMNS]; KEY_ROWS],
-    buffer: &'a mut [Keyboard]
+    buffer: &'a mut [Keyboard],
 ) -> &'a [Keyboard] {
-
     let mut out_idx: usize = 0;
 
     assert_eq!(KEY_MAPPING.len(), row_pins.len());
