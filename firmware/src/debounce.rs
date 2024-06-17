@@ -3,7 +3,6 @@ const MIN: u8 = 0;
 const MAX: u8 = 2;
 
 // Derives copy for easy array initialization.
-#[derive(Clone, Copy)]
 pub(crate) struct DebounceState {
     state_level: u8,
     last_transmitted_state: bool,

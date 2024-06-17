@@ -154,8 +154,7 @@ fn main() -> ! {
 
     led_pin.set_low().unwrap();
 
-    let mut debounce_states: [[DebounceState; KEY_COLUMNS]; KEY_ROWS] =
-        [[DebounceState::default(); KEY_COLUMNS]; KEY_ROWS];
+    let mut debounce_states: [[DebounceState; KEY_COLUMNS]; KEY_ROWS] = Default::default();
 
     let mut tick_count_down = timer.count_down();
     tick_count_down.start(TICK_PERIOD_MS.millis());
@@ -225,16 +224,26 @@ fn scan_keys<'a>(
 
         assert_eq!(row_mapping.len(), column_pins.len());
         for (col_idx, key) in row_mapping.iter().enumerate() {
-            if *key != Keyboard::NoEventIndicated {
-                let input = column_pins[col_idx].is_high().unwrap();
+            let input = column_pins[col_idx].is_high().unwrap();
+            let is_depressed = debounce_states[row_idx][col_idx].update(input);
 
-                let is_depressed = debounce_states[row_idx][col_idx].update(input);
-                if is_depressed {
-                    buffer[out_idx] = *key;
+            match (*key, is_depressed) {
+                (Keyboard::NoEventIndicated, _) => {}
+                (_, false) => {}
+                (Keyboard::Space, true) => {
+                    // is a bit special - because we have two spacebar buttons
+                    if !buffer[..out_idx].contains(key) {
+                        buffer[out_idx] = *key;
+                        out_idx += 1;
+                    }
+                }
+                (key, true) => {
+                    buffer[out_idx] = key;
                     out_idx += 1;
                 }
             }
         }
+        row_pins[row_idx].set_low().unwrap();
     }
 
     &buffer[..out_idx]
