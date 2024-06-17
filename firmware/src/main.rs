@@ -6,6 +6,7 @@ use cortex_m::prelude::*;
 
 use debounce::DebounceState;
 use embedded_hal::digital::InputPin;
+use key_table::KeyFunction;
 use key_table::KEY_MAPPING;
 // The macro for our start-up function
 use rp_pico::entry;
@@ -39,7 +40,12 @@ use rp_pico::hal;
 use rp_pico::hal::Timer;
 use usb_device::{class_prelude::*, prelude::*};
 
+use usbd_human_interface_device::device::consumer::ConsumerControl;
+use usbd_human_interface_device::device::consumer::ConsumerControlConfig;
+use usbd_human_interface_device::device::consumer::MultipleConsumerReport;
+use usbd_human_interface_device::device::keyboard::NKROBootKeyboard;
 use usbd_human_interface_device::device::keyboard::NKROBootKeyboardConfig;
+use usbd_human_interface_device::page::Consumer;
 use usbd_human_interface_device::page::Keyboard;
 use usbd_human_interface_device::prelude::*;
 
@@ -52,7 +58,9 @@ pub(crate) const KEY_COLUMNS: usize = 17;
 /// Period for polling for USB I/O.
 const TICK_PERIOD_MS: u32 = 1;
 /// Period between scans for key presses.
-const SCAN_PERIOD_MS: u32 = 5;
+const SCAN_PERIOD_MS: u32 = 10;
+/// Period between consumer (media key) reports.
+const CONSUMER_PERIOD_MS: u32 = 50;
 
 /// Entry point to our bare-metal application.
 ///
@@ -107,8 +115,9 @@ fn main() -> ! {
         &mut pac.RESETS,
     ));
 
-    let mut keyboard = UsbHidClassBuilder::new()
+    let mut multi = UsbHidClassBuilder::new()
         .add_device(NKROBootKeyboardConfig::default())
+        .add_device(ConsumerControlConfig::default())
         .build(&usb_bus);
 
     let mut usb_dev = UsbDeviceBuilder::new(&usb_bus, UsbVidPid(0x1209, 0x0001))
@@ -162,12 +171,19 @@ fn main() -> ! {
     let mut scan_count_down = timer.count_down();
     scan_count_down.start(SCAN_PERIOD_MS.millis());
 
+    let mut consumer_count_down = timer.count_down();
+    consumer_count_down.start(CONSUMER_PERIOD_MS.millis());
+
     // Way more than we ever need.
-    let mut report_buffer: [Keyboard; 200] = [Keyboard::NoEventIndicated; 200];
+    let mut key_report_buffer: [Keyboard; 32] = Default::default();
+    let mut consumer_report_buffer: [Consumer; 10] = Default::default();
+
+    let mut previous_consumer_report: MultipleConsumerReport = Default::default();
+    let mut consumer_report: MultipleConsumerReport = MultipleConsumerReport::default();
 
     loop {
         if tick_count_down.wait().is_ok() {
-            match keyboard.tick() {
+            match multi.tick() {
                 Ok(_) => {}
                 Err(UsbHidError::WouldBlock) => {}
                 Err(UsbHidError::Duplicate) => {}
@@ -176,30 +192,47 @@ fn main() -> ! {
         }
 
         if scan_count_down.wait().is_ok() {
-            let report: &[Keyboard] = scan_keys(
+            let (key_codes, consumer_codes) = scan_keys(
                 &mut row_pins,
                 &mut column_pins,
                 &mut delay,
                 &mut debounce_states,
-                &mut report_buffer,
+                &mut key_report_buffer,
+                &mut consumer_report_buffer,
             );
 
-            if report.is_empty() {
+            if key_codes.is_empty() && consumer_codes.is_empty() {
                 led_pin.set_low().unwrap()
             } else {
                 led_pin.set_high().unwrap()
             }
+            let keyboard = multi.device::<NKROBootKeyboard<'_, _>, _>();
 
-            match keyboard.device().write_report(report.iter().copied()) {
+            match keyboard.write_report(key_codes.iter().copied()) {
                 Ok(_) => {}
                 Err(UsbHidError::WouldBlock) => {}
                 Err(UsbHidError::Duplicate) => {}
                 Err(_) => panic!("Keyboard write failure."),
             }
+
+            consumer_report = MultipleConsumerReport::default();
+            consumer_report.codes[..consumer_codes.len()].copy_from_slice(consumer_codes);
         }
 
-        if usb_dev.poll(&mut [&mut keyboard]) {
-            match keyboard.device().read_report() {
+        if consumer_count_down.wait().is_ok() && consumer_report != previous_consumer_report {
+            let consumer = multi.device::<ConsumerControl<'_, _>, _>();
+            match consumer.write_report(&consumer_report) {
+                Ok(_) => {
+                    previous_consumer_report = consumer_report;
+                }
+                Err(UsbError::WouldBlock) => {}
+                Err(_) => panic!("Consumer write failure."),
+            }
+        }
+
+        if usb_dev.poll(&mut [&mut multi]) {
+            let keyboard = multi.device::<NKROBootKeyboard<'_, _>, _>();
+            match keyboard.read_report() {
                 Ok(_leds) => {}
                 Err(UsbError::WouldBlock) => {}
                 Err(_) => panic!("Keyboard read failure."),
@@ -213,9 +246,11 @@ fn scan_keys<'a>(
     column_pins: &mut [&mut Pin<DynPinId, FunctionSio<SioInput>, PullDown>; KEY_COLUMNS],
     delay: &mut Delay,
     debounce_states: &mut [[DebounceState; KEY_COLUMNS]; KEY_ROWS],
-    buffer: &'a mut [Keyboard],
-) -> &'a [Keyboard] {
-    let mut out_idx: usize = 0;
+    key_buffer: &'a mut [Keyboard],
+    consumer_buffer: &'a mut [Consumer],
+) -> (&'a [Keyboard], &'a [Consumer]) {
+    let mut key_out_idx: usize = 0;
+    let mut consumer_out_idx: usize = 0;
 
     assert_eq!(KEY_MAPPING.len(), row_pins.len());
     for (row_idx, row_mapping) in KEY_MAPPING.iter().enumerate() {
@@ -223,28 +258,39 @@ fn scan_keys<'a>(
         delay.delay_us(1);
 
         assert_eq!(row_mapping.len(), column_pins.len());
-        for (col_idx, key) in row_mapping.iter().enumerate() {
+        for (col_idx, function) in row_mapping.iter().enumerate() {
             let input = column_pins[col_idx].is_high().unwrap();
             let is_depressed = debounce_states[row_idx][col_idx].update(input);
 
-            match (*key, is_depressed) {
-                (Keyboard::NoEventIndicated, _) => {}
+            match (function, is_depressed) {
                 (_, false) => {}
-                (Keyboard::Space, true) => {
-                    // is a bit special - because we have two spacebar buttons
-                    if !buffer[..out_idx].contains(key) {
-                        buffer[out_idx] = *key;
-                        out_idx += 1;
+                (KeyFunction::Nothing, _) => {}
+                (KeyFunction::Key(Keyboard::NoEventIndicated), _) => {}
+
+                (KeyFunction::Key(Keyboard::Space), true) => {
+                    // The space key is a bit special - as there are two on the board.
+                    if !key_buffer[..key_out_idx].contains(&Keyboard::Space) {
+                        key_buffer[key_out_idx] = Keyboard::Space;
+                        key_out_idx += 1;
                     }
                 }
-                (key, true) => {
-                    buffer[out_idx] = key;
-                    out_idx += 1;
+
+                (KeyFunction::Key(key), true) => {
+                    key_buffer[key_out_idx] = *key;
+                    key_out_idx += 1;
+                }
+
+                (KeyFunction::Media(consumer), true) => {
+                    consumer_buffer[consumer_out_idx] = *consumer;
+                    consumer_out_idx += 1;
                 }
             }
         }
         row_pins[row_idx].set_low().unwrap();
     }
 
-    &buffer[..out_idx]
+    (
+        &key_buffer[..key_out_idx],
+        &consumer_buffer[..consumer_out_idx],
+    )
 }
