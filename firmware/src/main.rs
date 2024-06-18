@@ -11,6 +11,7 @@ use key_table::KEY_MAPPING;
 // The macro for our start-up function
 use rp_pico::entry;
 
+use frunk::HList;
 use fugit::ExtU32;
 
 // GPIO traits
@@ -37,6 +38,8 @@ use rp_pico::hal::pac;
 // higher-level drivers.
 use rp_pico::hal;
 
+use pac::interrupt;
+
 use rp_pico::hal::Timer;
 use usb_device::{class_prelude::*, prelude::*};
 
@@ -55,12 +58,27 @@ mod key_table;
 pub(crate) const KEY_ROWS: usize = 6;
 pub(crate) const KEY_COLUMNS: usize = 17;
 
-/// Period for polling for USB I/O.
-const TICK_PERIOD_MS: u32 = 1;
-/// Period between scans for key presses.
-const SCAN_PERIOD_MS: u32 = 10;
-/// Period between consumer (media key) reports.
-const CONSUMER_PERIOD_MS: u32 = 50;
+/// Period for calling tick() on the USB HID, and scanning the switch matrix.
+const HID_TICK_AND_MATRIX_SCAN_PERIOD_MS: u32 = 1;
+/// Period between sending keyboard reports.
+const KEYBOARD_REPORT_PERIOD_MS: u32 = 10;
+/// Period between sending consumer (media key) reports.
+const CONSUMER_REPORT_PERIOD_MS: u32 = 50;
+
+type UsbMultiDev = UsbHidClass<
+    'static,
+    hal::usb::UsbBus,
+    HList!(
+        ConsumerControl<'static, hal::usb::UsbBus>,
+        NKROBootKeyboard<'static, hal::usb::UsbBus>
+    ),
+>;
+
+static mut USB_BUS: Option<UsbBusAllocator<hal::usb::UsbBus>> = None;
+
+static mut USB_DEV: Option<UsbDevice<hal::usb::UsbBus>> = None;
+
+static mut MULTI_DEV: Option<UsbMultiDev> = None;
 
 /// Entry point to our bare-metal application.
 ///
@@ -106,24 +124,43 @@ fn main() -> ! {
         &mut pac.RESETS,
     );
 
-    // Set up the USB driver
-    let usb_bus = UsbBusAllocator::new(hal::usb::UsbBus::new(
-        pac.USBCTRL_REGS,
-        pac.USBCTRL_DPRAM,
-        clocks.usb_clock,
-        true,
-        &mut pac.RESETS,
-    ));
+    {
+        let usb_bus: UsbBusAllocator<hal::usb::UsbBus> =
+            UsbBusAllocator::new(hal::usb::UsbBus::new(
+                pac.USBCTRL_REGS,
+                pac.USBCTRL_DPRAM,
+                clocks.usb_clock,
+                true,
+                &mut pac.RESETS,
+            ));
 
-    let mut multi = UsbHidClassBuilder::new()
-        .add_device(NKROBootKeyboardConfig::default())
-        .add_device(ConsumerControlConfig::default())
-        .build(&usb_bus);
+        unsafe {
+            USB_BUS = Some(usb_bus);
+        }
+    }
 
-    let mut usb_dev = UsbDeviceBuilder::new(&usb_bus, UsbVidPid(0x1209, 0x0001))
-        .strings(&[StringDescriptors::default().product("Crappy Keyboard")])
-        .unwrap()
-        .build();
+    {
+        let usb_bus = unsafe { USB_BUS.as_ref() }.unwrap();
+        let multi = UsbHidClassBuilder::new()
+            .add_device(NKROBootKeyboardConfig::default())
+            .add_device(ConsumerControlConfig::default())
+            .build(usb_bus);
+        unsafe {
+            MULTI_DEV = Some(multi);
+        }
+    }
+
+    {
+        let usb_bus = unsafe { USB_BUS.as_ref() }.unwrap();
+        let usb_dev: UsbDevice<hal::usb::UsbBus> =
+            UsbDeviceBuilder::new(usb_bus, UsbVidPid(0x1209, 0x0001))
+                .strings(&[StringDescriptors::default().product("Crappy Keyboard")])
+                .unwrap()
+                .build();
+        unsafe {
+            USB_DEV = Some(usb_dev);
+        }
+    }
 
     // The delay object lets us wait for specified amounts of time (in
     // milliseconds)
@@ -165,90 +202,102 @@ fn main() -> ! {
 
     let mut debounce_states: [[DebounceState; KEY_COLUMNS]; KEY_ROWS] = Default::default();
 
-    let mut tick_count_down = timer.count_down();
-    tick_count_down.start(TICK_PERIOD_MS.millis());
+    let mut hid_tick_and_scan_count_down = timer.count_down();
+    hid_tick_and_scan_count_down.start(HID_TICK_AND_MATRIX_SCAN_PERIOD_MS.millis());
 
-    let mut scan_count_down = timer.count_down();
-    scan_count_down.start(SCAN_PERIOD_MS.millis());
+    let mut keyboard_count_down = timer.count_down();
+    keyboard_count_down.start(KEYBOARD_REPORT_PERIOD_MS.millis());
 
     let mut consumer_count_down = timer.count_down();
-    consumer_count_down.start(CONSUMER_PERIOD_MS.millis());
+    consumer_count_down.start(CONSUMER_REPORT_PERIOD_MS.millis());
 
     // Way more than we ever need.
-    let mut key_report_buffer: [Keyboard; 32] = Default::default();
-    let mut consumer_report_buffer: [Consumer; 10] = Default::default();
+    let mut key_codes_buffer: [Keyboard; 32] = Default::default();
+    let mut key_codes_len: usize = 0;
+    let mut consumer_codes_buffer: [Consumer; 10] = Default::default();
+    let mut consumer_codes_len: usize = 0;
 
     let mut previous_consumer_report: MultipleConsumerReport = Default::default();
-    let mut consumer_report: MultipleConsumerReport = MultipleConsumerReport::default();
+
+    // Enable the USB interrupt
+    unsafe {
+        pac::NVIC::unmask(hal::pac::Interrupt::USBCTRL_IRQ);
+    };
 
     loop {
-        if tick_count_down.wait().is_ok() {
-            match multi.tick() {
-                Ok(_) => {}
-                Err(UsbHidError::WouldBlock) => {}
-                Err(UsbHidError::Duplicate) => {}
-                Err(_) => panic!("Keyboard tick failure."),
-            }
-        }
+        if hid_tick_and_scan_count_down.wait().is_ok() {
+            cortex_m::interrupt::free(|_| {
+                let multi = unsafe { MULTI_DEV.as_mut() }.unwrap();
+                match multi.tick() {
+                    Ok(_) => {}
+                    Err(UsbHidError::WouldBlock) => {}
+                    Err(UsbHidError::Duplicate) => {}
+                    Err(_) => panic!("HID tick failure."),
+                }
+            });
 
-        if scan_count_down.wait().is_ok() {
-            let (key_codes, consumer_codes) = scan_keys(
+            (key_codes_len, consumer_codes_len) = scan_keys(
                 &mut row_pins,
                 &mut column_pins,
                 &mut delay,
                 &mut debounce_states,
-                &mut key_report_buffer,
-                &mut consumer_report_buffer,
+                &mut key_codes_buffer,
+                &mut consumer_codes_buffer,
             );
 
-            if key_codes.is_empty() && consumer_codes.is_empty() {
+            if key_codes_len > 0 || consumer_codes_len > 0 {
                 led_pin.set_low().unwrap()
             } else {
                 led_pin.set_high().unwrap()
             }
-            let keyboard = multi.device::<NKROBootKeyboard<'_, _>, _>();
-
-            match keyboard.write_report(key_codes.iter().copied()) {
-                Ok(_) => {}
-                Err(UsbHidError::WouldBlock) => {}
-                Err(UsbHidError::Duplicate) => {}
-                Err(_) => panic!("Keyboard write failure."),
-            }
-
-            consumer_report = MultipleConsumerReport::default();
-            consumer_report.codes[..consumer_codes.len()].copy_from_slice(consumer_codes);
         }
 
-        if consumer_count_down.wait().is_ok() && consumer_report != previous_consumer_report {
-            let consumer = multi.device::<ConsumerControl<'_, _>, _>();
-            match consumer.write_report(&consumer_report) {
-                Ok(_) => {
-                    previous_consumer_report = consumer_report;
+        if keyboard_count_down.wait().is_ok() {
+            cortex_m::interrupt::free(|_| {
+                let multi = unsafe { MULTI_DEV.as_mut() }.unwrap();
+                let keyboard = multi.device::<NKROBootKeyboard<'_, _>, _>();
+
+                match keyboard.write_report((key_codes_buffer[..key_codes_len]).iter().copied()) {
+                    Ok(_) => {}
+                    Err(UsbHidError::WouldBlock) => {}
+                    Err(UsbHidError::Duplicate) => {}
+                    Err(_) => panic!("Keyboard write failure."),
                 }
-                Err(UsbError::WouldBlock) => {}
-                Err(_) => panic!("Consumer write failure."),
-            }
+            });
         }
 
-        if usb_dev.poll(&mut [&mut multi]) {
-            let keyboard = multi.device::<NKROBootKeyboard<'_, _>, _>();
-            match keyboard.read_report() {
-                Ok(_leds) => {}
-                Err(UsbError::WouldBlock) => {}
-                Err(_) => panic!("Keyboard read failure."),
-            }
+        if consumer_count_down.wait().is_ok() {
+            let mut consumer_report = MultipleConsumerReport::default();
+            consumer_report.codes[..consumer_codes_len]
+                .copy_from_slice(&consumer_codes_buffer[..consumer_codes_len]);
+
+            cortex_m::interrupt::free(|_| {
+                let multi = unsafe { MULTI_DEV.as_mut() }.unwrap();
+                let consumer = multi.device::<ConsumerControl<'_, _>, _>();
+
+                match consumer.write_report(&consumer_report) {
+                    Ok(_) => {
+                        previous_consumer_report = consumer_report;
+                    }
+                    Err(UsbError::WouldBlock) => {}
+                    Err(_) => panic!("Consumer write failure."),
+                }
+            });
         }
+
+        // Avoid busylooping, we poll the timers at 10KHz.
+        delay.delay_us(100);
     }
 }
 
-fn scan_keys<'a>(
+fn scan_keys(
     row_pins: &mut [&mut Pin<DynPinId, FunctionSio<SioOutput>, PullDown>; KEY_ROWS],
     column_pins: &mut [&mut Pin<DynPinId, FunctionSio<SioInput>, PullDown>; KEY_COLUMNS],
     delay: &mut Delay,
     debounce_states: &mut [[DebounceState; KEY_COLUMNS]; KEY_ROWS],
-    key_buffer: &'a mut [Keyboard],
-    consumer_buffer: &'a mut [Consumer],
-) -> (&'a [Keyboard], &'a [Consumer]) {
+    key_buffer: &mut [Keyboard],
+    consumer_buffer: &mut [Consumer],
+) -> (usize, usize) {
     let mut key_out_idx: usize = 0;
     let mut consumer_out_idx: usize = 0;
 
@@ -289,8 +338,23 @@ fn scan_keys<'a>(
         row_pins[row_idx].set_low().unwrap();
     }
 
-    (
-        &key_buffer[..key_out_idx],
-        &consumer_buffer[..consumer_out_idx],
-    )
+    (key_out_idx, consumer_out_idx)
+}
+
+#[allow(non_snake_case)]
+#[interrupt]
+fn USBCTRL_IRQ() {
+    cortex_m::interrupt::free(|_| {
+        let usb_dev = unsafe { USB_DEV.as_mut() }.unwrap();
+        let multi = unsafe { MULTI_DEV.as_mut() }.unwrap();
+
+        while usb_dev.poll(&mut [multi]) {
+            let keyboard = multi.device::<NKROBootKeyboard<'_, _>, _>();
+            match keyboard.read_report() {
+                Ok(_leds) => {}
+                Err(UsbError::WouldBlock) => {}
+                Err(_) => panic!("Keyboard read failure."),
+            }
+        }
+    });
 }
