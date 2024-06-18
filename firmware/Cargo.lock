@@ -346,6 +346,7 @@ dependencies = [
  "cortex-m-rt",
  "critical-section",
  "embedded-hal 1.0.0",
+ "frunk",
  "fugit",
  "panic-halt",
  "rp-pico",

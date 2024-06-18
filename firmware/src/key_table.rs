@@ -32,7 +32,7 @@ pub(crate) const KEY_MAPPING: [[KeyFunction; KEY_COLUMNS]; KEY_ROWS] = [
         Key(RightArrow),   //
     ],
     [
-        Nothing,             // magic D
+        Media(Consumer::ALTextEditor),             // magic D
         Key(LeftShift),      //
         Key(NonUSBackslash), //
         Key(Z),              //
@@ -51,7 +51,7 @@ pub(crate) const KEY_MAPPING: [[KeyFunction; KEY_COLUMNS]; KEY_ROWS] = [
         Key(PageDown),       //
     ],
     [
-        Nothing,         // magic C
+        Media(Consumer::ALCalculator),         // magic C
         Key(CapsLock),   //
         Nothing,         // not wired
         Key(A),          //

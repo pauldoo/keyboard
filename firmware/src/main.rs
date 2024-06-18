@@ -245,7 +245,7 @@ fn main() -> ! {
                 &mut consumer_codes_buffer,
             );
 
-            if key_codes_len > 0 || consumer_codes_len > 0 {
+            if key_codes_len == 0 && consumer_codes_len == 0 {
                 led_pin.set_low().unwrap()
             } else {
                 led_pin.set_high().unwrap()
@@ -268,8 +268,9 @@ fn main() -> ! {
 
         if consumer_count_down.wait().is_ok() {
             let mut consumer_report = MultipleConsumerReport::default();
-            consumer_report.codes[..consumer_codes_len]
-                .copy_from_slice(&consumer_codes_buffer[..consumer_codes_len]);
+            let len = usize::min(consumer_codes_len, consumer_report.codes.len());
+            consumer_report.codes[..len]
+                .copy_from_slice(&consumer_codes_buffer[..len]);
 
             cortex_m::interrupt::free(|_| {
                 let multi = unsafe { MULTI_DEV.as_mut() }.unwrap();
