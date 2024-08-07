@@ -1,6 +1,6 @@
 // Simple debounce.
 const MIN: u8 = 0;
-const MAX: u8 = 5;
+const MAX: u8 = 10;
 
 // Derives copy for easy array initialization.
 pub(crate) struct DebounceState {
