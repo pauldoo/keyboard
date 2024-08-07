@@ -25,8 +25,10 @@ cl_width = 1.75;
 shift_width = 1.25;
 // ctrl, super, alt
 csa_width = 1.25;
-// space_width
-space_width = 3.0;
+// width of space keys
+space_width_key = 2.0;
+// width allocated to space keys on keyboard
+space_width_allocated = 3.0;
 right_shift_width = 1.75;
 
 enter_top_width = 1.5;
@@ -277,7 +279,7 @@ module left_board() {
 
             // ctrl, super, alt, space
             translate([0, border + (fn_key_fudge + 4.5)*key_stride,0])
-            switch_holes([magic_key_width, csa_width, csa_width, csa_width, space_width], true);
+            switch_holes([magic_key_width, csa_width, csa_width, csa_width, space_width_allocated], true);
         }
     }
 }
@@ -329,7 +331,7 @@ module right_board() {
 
             // space, alt, super, ctrl, left, down, right, 
             translate([0, border + (fn_key_fudge + 4.5)*key_stride, 0])
-            switch_holes([space_width, 1, 1, 1, 1, 1, 1], false);
+            switch_holes([space_width_allocated, 1, 1, 1, 1, 1, 1], false);
         }
     }
 }
@@ -450,8 +452,8 @@ module blue_keys() {
             ["Ctrl", undef, csa_width],
             ["\U00e712", undef, csa_width], // super
             ["Alt", undef, csa_width],
-            ["", undef, space_width],
-            ["", undef, space_width],
+            ["", undef, space_width_key],
+            ["", undef, space_width_key],
             ["Alt", undef],
             ["\U00e712", undef],
             ["Ctrl", undef],
