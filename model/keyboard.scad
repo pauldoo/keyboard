@@ -430,25 +430,25 @@ module blue_keys() {
             ["\U00f028"], // volup
             ["Del"],
 
-            ["\U0f0bed"],
+            ["\U0f040e"], // play/pause
             ["`", "¬"],
             ["\U0f0b5c", undef, 2.0],
             ["Home"],
 
-            ["\U0f0bf0"],
+            ["\U0f075f"], // mute
             ["\U0f0312", undef, tab_width],
             ["End"],
 
-            ["\U0f0bf3"],
+            ["\U0f00ec"], // calculator
             ["\U0f0632", undef, cl_width],
             ["PgUp"],
 
-            ["\U0f0bf6"],
+            ["\U00f129"], // debug
             ["\U0f0636", undef, shift_width],
             ["\U0f0636", undef, right_shift_width],
             ["PgDn"],
 
-            ["\U0f0bf9"],
+            ["\U0f036d"], // mic on/off
             ["Ctrl", undef, csa_width],
             ["\U00e712", undef, csa_width], // super
             ["Alt", undef, csa_width],

@@ -316,24 +316,26 @@ fn scan_keys(
                 (_, false) => {}
                 (KeyFunction::Nothing, _) => {}
                 (KeyFunction::Key(Keyboard::NoEventIndicated), _) => {}
-
                 (KeyFunction::Key(Keyboard::Space), true) => {
-                    // The space key is a bit special - as there are two on the board.
-                    if !key_buffer[..key_out_idx].contains(&Keyboard::Space) {
-                        key_buffer[key_out_idx] = Keyboard::Space;
-                        key_out_idx += 1;
-                    }
-                }
-
+                                // The space key is a bit special - as there are two on the board.
+                                if !key_buffer[..key_out_idx].contains(&Keyboard::Space) {
+                                    key_buffer[key_out_idx] = Keyboard::Space;
+                                    key_out_idx += 1;
+                                }
+                            }
                 (KeyFunction::Key(key), true) => {
-                    key_buffer[key_out_idx] = *key;
-                    key_out_idx += 1;
-                }
-
+                                key_buffer[key_out_idx] = *key;
+                                key_out_idx += 1;
+                            }
                 (KeyFunction::Media(consumer), true) => {
-                    consumer_buffer[consumer_out_idx] = *consumer;
-                    consumer_out_idx += 1;
-                }
+                                consumer_buffer[consumer_out_idx] = *consumer;
+                                consumer_out_idx += 1;
+                            }
+                (KeyFunction::MultiKey(keys), true) => {
+                    let len = keys.len();
+                    key_buffer[key_out_idx..][..len].copy_from_slice(keys);
+                    key_out_idx += len;
+                },
             }
         }
         row_pins[row_idx].set_low().unwrap();

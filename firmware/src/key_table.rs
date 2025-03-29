@@ -8,12 +8,14 @@ use KeyFunction::*;
 pub(crate) enum KeyFunction {
     Nothing,
     Key(Keyboard),
-    Media(Consumer),
+    MultiKey(&'static [Keyboard]),
+    Media(Consumer)
 }
 
 pub(crate) const KEY_MAPPING: [[KeyFunction; KEY_COLUMNS]; KEY_ROWS] = [
     [
-        Nothing,           // magic E
+        // I bind "meta+I" to mute/unmute in GNOME.
+        MultiKey(&[Keyboard::LeftGUI, Keyboard::I]), // magic E
         Key(LeftControl),  //
         Key(LeftGUI),      //
         Key(LeftAlt),      //
@@ -32,6 +34,8 @@ pub(crate) const KEY_MAPPING: [[KeyFunction; KEY_COLUMNS]; KEY_ROWS] = [
         Key(RightArrow),   //
     ],
     [
+        // "editor" doesn't actually work.  Intend to repurpose this as a
+        // key to dump debug info perhaps.
         Media(Consumer::ALTextEditor),             // magic D
         Key(LeftShift),      //
         Key(NonUSBackslash), //
@@ -70,7 +74,7 @@ pub(crate) const KEY_MAPPING: [[KeyFunction; KEY_COLUMNS]; KEY_ROWS] = [
         Key(PageUp),     //
     ],
     [
-        Media(Consumer::PlayPause), // magic B
+        Media(Consumer::Mute), // magic B
         Key(Tab),                   //
         Nothing,                    // not wired
         Key(Q),                     //
@@ -89,7 +93,7 @@ pub(crate) const KEY_MAPPING: [[KeyFunction; KEY_COLUMNS]; KEY_ROWS] = [
         Key(End),                   //
     ],
     [
-        Media(Consumer::Mute), // Magic a
+        Media(Consumer::PlayPause), // Magic a
         Key(Grave),            //
         Key(Keyboard1),        //
         Key(Keyboard2),        //
