@@ -224,6 +224,7 @@ fn main() -> ! {
         pac::NVIC::unmask(hal::pac::Interrupt::USBCTRL_IRQ);
     };
 
+    let mut scan_clock: u64 = 0;
     loop {
         if hid_tick_and_scan_count_down.wait().is_ok() {
             cortex_m::interrupt::free(|_| {
@@ -236,6 +237,7 @@ fn main() -> ! {
                 }
             });
 
+            scan_clock += 1;
             (key_codes_len, consumer_codes_len) = scan_keys(
                 &mut row_pins,
                 &mut column_pins,
@@ -243,6 +245,7 @@ fn main() -> ! {
                 &mut debounce_states,
                 &mut key_codes_buffer,
                 &mut consumer_codes_buffer,
+                scan_clock
             );
 
             if key_codes_len == 0 && consumer_codes_len == 0 {
@@ -298,6 +301,7 @@ fn scan_keys(
     debounce_states: &mut [[DebounceState; KEY_COLUMNS]; KEY_ROWS],
     key_buffer: &mut [Keyboard],
     consumer_buffer: &mut [Consumer],
+    scan_clock: u64
 ) -> (usize, usize) {
     let mut key_out_idx: usize = 0;
     let mut consumer_out_idx: usize = 0;
@@ -310,7 +314,7 @@ fn scan_keys(
         assert_eq!(row_mapping.len(), column_pins.len());
         for (col_idx, function) in row_mapping.iter().enumerate() {
             let input = column_pins[col_idx].is_high().unwrap();
-            let is_depressed = debounce_states[row_idx][col_idx].update(input);
+            let is_depressed = debounce_states[row_idx][col_idx].update(input, scan_clock);
 
             match (function, is_depressed) {
                 (_, false) => {}
