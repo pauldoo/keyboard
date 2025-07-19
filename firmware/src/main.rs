@@ -27,6 +27,7 @@ use rp_pico::hal::gpio::Pin;
 use rp_pico::hal::gpio::PullDown;
 use rp_pico::hal::gpio::SioInput;
 use rp_pico::hal::gpio::SioOutput;
+use rp_pico::hal::i2c::I2C;
 // Pull in any important traits
 use rp_pico::hal::prelude::*;
 
@@ -51,6 +52,12 @@ use usbd_human_interface_device::device::keyboard::NKROBootKeyboardConfig;
 use usbd_human_interface_device::page::Consumer;
 use usbd_human_interface_device::page::Keyboard;
 use usbd_human_interface_device::prelude::*;
+
+use fugit::RateExtU32;
+
+use embedded_io::Write;
+
+use panic_halt as _;
 
 mod debounce;
 mod key_table;
@@ -162,6 +169,22 @@ fn main() -> ! {
         }
     }
 
+    let sda_pin: hal::gpio::Pin<_, hal::gpio::FunctionI2C, _> = pins.gpio26.reconfigure();
+    let scl_pin: hal::gpio::Pin<_, hal::gpio::FunctionI2C, _> = pins.gpio27.reconfigure();
+
+
+    //let sda_pin = pins.gpio26.into_function::<FunctionI2C>();
+    //let scl_pin = pins.gpio27.into_function::<FunctionI2C>();
+    // Create I2C peripheral - using I2C1 for GP26/GP27
+    let mut i2c = I2C::i2c1(
+        pac.I2C1,
+        sda_pin,
+        scl_pin,
+        100.kHz(), // I2C clock frequency
+        &mut pac.RESETS,
+        &clocks.peripheral_clock,
+    );
+
     // The delay object lets us wait for specified amounts of time (in
     // milliseconds)
     let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
@@ -224,7 +247,11 @@ fn main() -> ! {
         pac::NVIC::unmask(hal::pac::Interrupt::USBCTRL_IRQ);
     };
 
+    let mut press_counter: u64 = 0;
     let mut scan_clock: u64 = 0;
+
+    //i2c.write(0x08u8, b"binky");
+
     loop {
         if hid_tick_and_scan_count_down.wait().is_ok() {
             cortex_m::interrupt::free(|_| {
@@ -238,6 +265,7 @@ fn main() -> ! {
             });
 
             scan_clock += 1;
+            let press_counter_previous = press_counter;
             (key_codes_len, consumer_codes_len) = scan_keys(
                 &mut row_pins,
                 &mut column_pins,
@@ -245,13 +273,21 @@ fn main() -> ! {
                 &mut debounce_states,
                 &mut key_codes_buffer,
                 &mut consumer_codes_buffer,
-                scan_clock
+                scan_clock,
+                || press_counter += 1
             );
 
             if key_codes_len == 0 && consumer_codes_len == 0 {
                 led_pin.set_low().unwrap()
             } else {
                 led_pin.set_high().unwrap()
+            }
+
+            if press_counter != press_counter_previous {
+                let mut bytes = [0u8; 12];
+                write!(bytes.as_mut_slice(), "{}", press_counter);
+                let len = bytes.iter().take_while(|n| **n != 0u8).count();
+                i2c.write(0x08u8, &bytes[..len]);
             }
         }
 
@@ -294,14 +330,15 @@ fn main() -> ! {
     }
 }
 
-fn scan_keys(
+fn scan_keys<F: FnMut()>(
     row_pins: &mut [&mut Pin<DynPinId, FunctionSio<SioOutput>, PullDown>; KEY_ROWS],
     column_pins: &mut [&mut Pin<DynPinId, FunctionSio<SioInput>, PullDown>; KEY_COLUMNS],
     delay: &mut Delay,
     debounce_states: &mut [[DebounceState; KEY_COLUMNS]; KEY_ROWS],
     key_buffer: &mut [Keyboard],
     consumer_buffer: &mut [Consumer],
-    scan_clock: u64
+    scan_clock: u64,
+    mut press_action: F
 ) -> (usize, usize) {
     let mut key_out_idx: usize = 0;
     let mut consumer_out_idx: usize = 0;
@@ -314,7 +351,7 @@ fn scan_keys(
         assert_eq!(row_mapping.len(), column_pins.len());
         for (col_idx, function) in row_mapping.iter().enumerate() {
             let input = column_pins[col_idx].is_high().unwrap();
-            let is_depressed = debounce_states[row_idx][col_idx].update(input, scan_clock);
+            let is_depressed = debounce_states[row_idx][col_idx].update(input, scan_clock, &mut press_action);
 
             match (function, is_depressed) {
                 (_, false) => {}

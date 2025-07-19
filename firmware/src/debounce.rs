@@ -9,11 +9,14 @@ pub(crate) struct DebounceState {
 }
 
 impl DebounceState {
-    pub fn update(&mut self, signal_input: bool, clock: u64) -> bool {
+    pub fn update<F : FnMut()>(&mut self, signal_input: bool, clock: u64, mut press_action: F) -> bool {
         if signal_input != self.state && clock >= self.earliest_next_change_clock {
             // State has changed, and cooldown period since last change has expired.
             self.state = signal_input;
             self.earliest_next_change_clock = clock + COOLDOWN_TICKS;
+            if self.state {
+                press_action();
+            }
         }
         self.state
     }
