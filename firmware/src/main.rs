@@ -1,7 +1,10 @@
 #![no_std]
 #![no_main]
 
+use core::cell::RefCell;
+
 use cortex_m::delay::Delay;
+use cortex_m::interrupt::Mutex;
 use cortex_m::prelude::*;
 
 use debounce::DebounceState;
@@ -42,6 +45,7 @@ use rp_pico::hal;
 use pac::interrupt;
 
 use rp_pico::hal::Timer;
+use static_cell::StaticCell;
 use usb_device::{class_prelude::*, prelude::*};
 
 use usbd_human_interface_device::device::consumer::ConsumerControl;
@@ -49,6 +53,9 @@ use usbd_human_interface_device::device::consumer::ConsumerControlConfig;
 use usbd_human_interface_device::device::consumer::MultipleConsumerReport;
 use usbd_human_interface_device::device::keyboard::NKROBootKeyboard;
 use usbd_human_interface_device::device::keyboard::NKROBootKeyboardConfig;
+use usbd_human_interface_device::device::mouse::WheelMouse;
+use usbd_human_interface_device::device::mouse::WheelMouseConfig;
+use usbd_human_interface_device::device::mouse::WheelMouseReport;
 use usbd_human_interface_device::page::Consumer;
 use usbd_human_interface_device::page::Keyboard;
 use usbd_human_interface_device::prelude::*;
@@ -76,16 +83,15 @@ type UsbMultiDev = UsbHidClass<
     'static,
     hal::usb::UsbBus,
     HList!(
+        WheelMouse<'static, hal::usb::UsbBus>,
         ConsumerControl<'static, hal::usb::UsbBus>,
         NKROBootKeyboard<'static, hal::usb::UsbBus>
     ),
 >;
 
-static mut USB_BUS: Option<UsbBusAllocator<hal::usb::UsbBus>> = None;
+static USB_DEV: Mutex<RefCell<Option<UsbDevice<hal::usb::UsbBus>>>> = Mutex::new(RefCell::new(None));
 
-static mut USB_DEV: Option<UsbDevice<hal::usb::UsbBus>> = None;
-
-static mut MULTI_DEV: Option<UsbMultiDev> = None;
+static MULTI_DEV: Mutex<RefCell<Option<UsbMultiDev>>> = Mutex::new(RefCell::new(None));
 
 /// Entry point to our bare-metal application.
 ///
@@ -131,42 +137,37 @@ fn main() -> ! {
         &mut pac.RESETS,
     );
 
-    {
-        let usb_bus: UsbBusAllocator<hal::usb::UsbBus> =
-            UsbBusAllocator::new(hal::usb::UsbBus::new(
+    static USB_ALLOC: StaticCell<UsbBusAllocator<hal::usb::UsbBus>> = StaticCell::new();
+    let usb_alloc = USB_ALLOC.init(UsbBusAllocator::new(hal::usb::UsbBus::new(
                 pac.USBCTRL_REGS,
                 pac.USBCTRL_DPRAM,
                 clocks.usb_clock,
                 true,
                 &mut pac.RESETS,
-            ));
-
-        unsafe {
-            USB_BUS = Some(usb_bus);
-        }
-    }
+            )));
 
     {
-        let usb_bus = unsafe { USB_BUS.as_ref() }.unwrap();
         let multi = UsbHidClassBuilder::new()
             .add_device(NKROBootKeyboardConfig::default())
             .add_device(ConsumerControlConfig::default())
-            .build(usb_bus);
-        unsafe {
-            MULTI_DEV = Some(multi);
-        }
+            .add_device(WheelMouseConfig::default())
+            .build(usb_alloc);
+
+        cortex_m::interrupt::free(|cs| {
+            MULTI_DEV.borrow(cs).replace(Some(multi));
+        });
     }
 
     {
-        let usb_bus = unsafe { USB_BUS.as_ref() }.unwrap();
         let usb_dev: UsbDevice<hal::usb::UsbBus> =
-            UsbDeviceBuilder::new(usb_bus, UsbVidPid(0x1209, 0x0001))
+            UsbDeviceBuilder::new(usb_alloc, UsbVidPid(0x1209, 0x0001))
                 .strings(&[StringDescriptors::default().product("Crappy Keyboard")])
                 .unwrap()
                 .build();
-        unsafe {
-            USB_DEV = Some(usb_dev);
-        }
+
+        cortex_m::interrupt::free(|cs| {
+            USB_DEV.borrow(cs).replace(Some(usb_dev));
+        });
     }
 
     let sda_pin: hal::gpio::Pin<_, hal::gpio::FunctionI2C, _> = pins.gpio26.reconfigure();
@@ -248,20 +249,24 @@ fn main() -> ! {
     };
 
     let mut press_counter: u64 = 0;
+    let mut mouse_tracker: MouseTracker = Default::default();
     let mut scan_clock: u64 = 0;
+    let mut mouse_update_counter = 0u64;
 
     //i2c.write(0x08u8, b"binky");
 
     loop {
         if hid_tick_and_scan_count_down.wait().is_ok() {
-            cortex_m::interrupt::free(|_| {
-                let multi = unsafe { MULTI_DEV.as_mut() }.unwrap();
-                match multi.tick() {
-                    Ok(_) => {}
-                    Err(UsbHidError::WouldBlock) => {}
-                    Err(UsbHidError::Duplicate) => {}
-                    Err(_) => panic!("HID tick failure."),
-                }
+            cortex_m::interrupt::free(|cs| {
+                let mut x = MULTI_DEV.borrow(cs).borrow_mut();
+                if let Some(multi) = x.as_mut() {
+                    match multi.tick() {
+                        Ok(_) => {}
+                        Err(UsbHidError::WouldBlock) => {}
+                        Err(UsbHidError::Duplicate) => {}
+                        Err(_) => panic!("HID tick failure."),
+                    }
+                }                
             });
 
             scan_clock += 1;
@@ -283,24 +288,42 @@ fn main() -> ! {
                 led_pin.set_high().unwrap()
             }
 
-            if press_counter != press_counter_previous {
+            if press_counter != press_counter_previous && true {
                 let mut bytes = [0u8; 12];
-                write!(bytes.as_mut_slice(), "{}", press_counter);
+                let _ = write!(bytes.as_mut_slice(), "{}", press_counter);
                 let len = bytes.iter().take_while(|n| **n != 0u8).count();
-                i2c.write(0x08u8, &bytes[..len]);
+                let _ = i2c.write(0x08u8, &bytes[..len]);
             }
         }
 
         if keyboard_count_down.wait().is_ok() {
-            cortex_m::interrupt::free(|_| {
-                let multi = unsafe { MULTI_DEV.as_mut() }.unwrap();
-                let keyboard = multi.device::<NKROBootKeyboard<'_, _>, _>();
+            mouse_tracker.update(&mut i2c);
 
-                match keyboard.write_report((key_codes_buffer[..key_codes_len]).iter().copied()) {
-                    Ok(_) => {}
-                    Err(UsbHidError::WouldBlock) => {}
-                    Err(UsbHidError::Duplicate) => {}
-                    Err(_) => panic!("Keyboard write failure."),
+            cortex_m::interrupt::free(|cs| {
+                let mut x = MULTI_DEV.borrow(cs).borrow_mut();
+                if let Some(multi) = x.as_mut() {
+
+                    let keyboard = multi.device::<NKROBootKeyboard<'_, _>, _>();
+
+                    match keyboard.write_report((key_codes_buffer[..key_codes_len]).iter().copied()) {
+                        Ok(_) => {}
+                        Err(UsbHidError::WouldBlock) => {}
+                        Err(UsbHidError::Duplicate) => {}
+                        Err(_) => panic!("Keyboard write failure."),
+                    }
+
+                    let mouse = multi.device::<WheelMouse<'_, _>, _>();
+                    let mut mouse_report = WheelMouseReport::default();
+                    let mouse_position = mouse_tracker.current();
+                    mouse_report.x = mouse_out(mouse_position.x);
+                    mouse_report.y = mouse_out(mouse_position.y);
+                    mouse_report.buttons = if mouse_position.pressed {0x1} else {0}; 
+                    match mouse.write_report(&mouse_report) {
+                        Ok(_) => {}
+                        Err(UsbHidError::WouldBlock) => {}
+                        Err(UsbHidError::Duplicate) => {}
+                        Err(_) => panic!("Mouse write failure."),
+                    }
                 }
             });
         }
@@ -311,22 +334,87 @@ fn main() -> ! {
             consumer_report.codes[..len]
                 .copy_from_slice(&consumer_codes_buffer[..len]);
 
-            cortex_m::interrupt::free(|_| {
-                let multi = unsafe { MULTI_DEV.as_mut() }.unwrap();
-                let consumer = multi.device::<ConsumerControl<'_, _>, _>();
+            cortex_m::interrupt::free(|cs| {
+                let mut x = MULTI_DEV.borrow(cs).borrow_mut();
+                if let Some(multi) = x.as_mut() {
 
-                match consumer.write_report(&consumer_report) {
-                    Ok(_) => {
-                        previous_consumer_report = consumer_report;
+                    let consumer = multi.device::<ConsumerControl<'_, _>, _>();
+
+                    match consumer.write_report(&consumer_report) {
+                        Ok(_) => {
+                            previous_consumer_report = consumer_report;
+                        }
+                        Err(UsbError::WouldBlock) => {}
+                        Err(_) => panic!("Consumer write failure."),
                     }
-                    Err(UsbError::WouldBlock) => {}
-                    Err(_) => panic!("Consumer write failure."),
                 }
+
             });
         }
 
         // Avoid busylooping, we poll the timers at 10KHz.
         delay.delay_us(100);
+    }
+}
+
+fn mouse_out(r: i32) -> i8 {
+    const fn op(x:i32) -> i32 { x*x*x.signum() }
+
+    const DESCALE: i32 = op(512) / 8;
+    let r = (op(r) / DESCALE).clamp(i32::from(i8::MIN), i32::from(i8::MAX));
+
+    i8::try_from(r).unwrap()
+}
+
+#[derive(Clone, Eq, PartialEq, Default)]
+struct MouseState {
+    x: i32,
+    y: i32,
+    pressed: bool
+}
+
+#[derive(Default)]
+struct MouseTracker {
+    current: MouseState,
+    origin: Option<MouseState>
+}
+
+impl MouseTracker {
+    // Read mouse position from i2c, return flag indicating if position has
+    // changed.
+    fn update(&mut self, i2c: &mut impl embedded_hal::i2c::I2c) -> bool {
+
+        if let Some(raw_position) = read_mouse_raw(i2c) {
+            if self.origin.is_none() {
+                self.origin = Some(raw_position.clone())
+            }
+            let prev_position = self.current.clone();
+            self.current = raw_position;
+            self.current.x -= self.origin.as_ref().unwrap().x;
+            self.current.y -= self.origin.as_ref().unwrap().y;
+            self.current != prev_position
+        } else {
+            false
+        }
+    }
+
+    fn current(&self) -> &MouseState {
+        &self.current
+    }
+}
+
+fn read_mouse_raw(i2c: &mut impl embedded_hal::i2c::I2c) -> Option<MouseState> {
+    let mut mouse_buffer: [u8; 5] = [0u8; 5];
+
+    match i2c.read(0x08u8, mouse_buffer.as_mut_slice()) {
+        Ok(_) => {
+            Some(MouseState{
+                x: i32::from(u16::from_be_bytes([mouse_buffer[0], mouse_buffer[1]])),
+                y: i32::from(u16::from_be_bytes([mouse_buffer[2], mouse_buffer[3]])),
+                pressed: mouse_buffer[4] == 1u8
+            })
+        },
+        Err(_) => None,
     }
 }
 
@@ -388,16 +476,19 @@ fn scan_keys<F: FnMut()>(
 #[allow(non_snake_case)]
 #[interrupt]
 fn USBCTRL_IRQ() {
-    cortex_m::interrupt::free(|_| {
-        let usb_dev = unsafe { USB_DEV.as_mut() }.unwrap();
-        let multi = unsafe { MULTI_DEV.as_mut() }.unwrap();
+    cortex_m::interrupt::free(|cs| {
+        let mut usb_dev = USB_DEV.borrow(cs).borrow_mut();
+        let mut multi = MULTI_DEV.borrow(cs).borrow_mut();
+        if let Some(usb_dev) = usb_dev.as_mut() &&
+            let Some(multi) = multi.as_mut() {
 
-        while usb_dev.poll(&mut [multi]) {
-            let keyboard = multi.device::<NKROBootKeyboard<'_, _>, _>();
-            match keyboard.read_report() {
-                Ok(_leds) => {}
-                Err(UsbError::WouldBlock) => {}
-                Err(_) => panic!("Keyboard read failure."),
+            while usb_dev.poll(&mut [multi]) {
+                let keyboard = multi.device::<NKROBootKeyboard<'_, _>, _>();
+                match keyboard.read_report() {
+                    Ok(_leds) => {}
+                    Err(UsbError::WouldBlock) => {}
+                    Err(_) => panic!("Keyboard read failure."),
+                }
             }
         }
     });

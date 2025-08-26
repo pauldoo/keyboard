@@ -1,19 +1,23 @@
 [package]
 name = "pico_play"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 cortex-m = "0.7.7"
 cortex-m-rt = "0.7.3"
+cortex-m-rtic = "1.1"
 critical-section = "1.1.2"
 embedded-hal = "1.0.0"
 embedded-io = "0.6.1"
 frunk = { version = "0.4", default-features = false }
 fugit = "0.3.7"
 panic-halt = "0.2.0"
+portable-atomic = { version = "1.5", features = ["critical-section"] }
 rp-pico = "0.9.0"
+rp2040-hal = "0.11"
+static_cell = "2.1.1"
 usb-device = "0.3.2"
 usbd-human-interface-device = "0.5.0"
