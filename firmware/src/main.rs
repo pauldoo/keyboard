@@ -251,7 +251,6 @@ fn main() -> ! {
     let mut press_counter: u64 = 0;
     let mut mouse_tracker: MouseTracker = Default::default();
     let mut scan_clock: u64 = 0;
-    let mut mouse_update_counter = 0u64;
 
     //i2c.write(0x08u8, b"binky");
 
@@ -314,12 +313,12 @@ fn main() -> ! {
 
                     let mouse = multi.device::<WheelMouse<'_, _>, _>();
                     let mut mouse_report = WheelMouseReport::default();
-                    let mouse_position = mouse_tracker.current();
-                    mouse_report.x = mouse_out(mouse_position.x);
-                    mouse_report.y = mouse_out(mouse_position.y);
-                    mouse_report.buttons = if mouse_position.pressed {0x1} else {0}; 
+                    mouse_tracker.populate_report(&mut mouse_report);
+
                     match mouse.write_report(&mouse_report) {
-                        Ok(_) => {}
+                        Ok(_) => {
+                            mouse_tracker.account_report(&mouse_report);
+                        }
                         Err(UsbHidError::WouldBlock) => {}
                         Err(UsbHidError::Duplicate) => {}
                         Err(_) => panic!("Mouse write failure."),
@@ -357,62 +356,76 @@ fn main() -> ! {
     }
 }
 
-fn mouse_out(r: i32) -> i8 {
-    const fn op(x:i32) -> i32 { x*x*x.signum() }
-
-    const DESCALE: i32 = op(512) / 8;
-    let r = (op(r) / DESCALE).clamp(i32::from(i8::MIN), i32::from(i8::MAX));
-
-    i8::try_from(r).unwrap()
+#[derive(Default, Clone)]
+struct Point2D<T> {
+    x: T,
+    y: T
 }
 
-#[derive(Clone, Eq, PartialEq, Default)]
-struct MouseState {
-    x: i32,
-    y: i32,
-    pressed: bool
-}
+type ButtonState = bool;
 
 #[derive(Default)]
 struct MouseTracker {
-    current: MouseState,
-    origin: Option<MouseState>
+    unreported_movement: Point2D<i64>,
+    button: ButtonState,
+    origin: Option<Point2D<i16>>
 }
 
-impl MouseTracker {
-    // Read mouse position from i2c, return flag indicating if position has
-    // changed.
-    fn update(&mut self, i2c: &mut impl embedded_hal::i2c::I2c) -> bool {
+fn mouse_curve(d: i16) -> i32 {
+    if false {
+        let d = i32::from(d);
+        d*d*d.signum()
+    } else {
+        i32::from(d) * 500
+    }
+}
 
-        if let Some(raw_position) = read_mouse_raw(i2c) {
+static MOUSE_REPORT_SCALE: i64 = 30_000;
+
+impl MouseTracker {
+    // Read mouse position from i2c, updating internal measurement of movement.
+    fn update(&mut self, i2c: &mut impl embedded_hal::i2c::I2c) {
+        if let Some(raw) = read_mouse_raw(i2c) {
+            self.button = raw.1;
             if self.origin.is_none() {
-                self.origin = Some(raw_position.clone())
+                self.origin = Some(raw.0.clone())
             }
-            let prev_position = self.current.clone();
-            self.current = raw_position;
-            self.current.x -= self.origin.as_ref().unwrap().x;
-            self.current.y -= self.origin.as_ref().unwrap().y;
-            self.current != prev_position
-        } else {
-            false
+
+            let raw = raw.0;
+            let origin = self.origin.as_ref().unwrap();
+            self.unreported_movement.x += i64::from(mouse_curve(raw.x - origin.x));
+            self.unreported_movement.y += i64::from(mouse_curve(raw.y - origin.y));
         }
     }
 
-    fn current(&self) -> &MouseState {
-        &self.current
+    fn populate_report(&self, report: &mut WheelMouseReport) {
+        let rx = (self.unreported_movement.x / MOUSE_REPORT_SCALE).clamp(i8::MIN.into(), i8::MAX.into());
+        let ry = (self.unreported_movement.y / MOUSE_REPORT_SCALE).clamp(i8::MIN.into(), i8::MAX.into());
+
+        report.x = i8::try_from(rx).unwrap();
+        report.y = i8::try_from(ry).unwrap();
+        report.buttons = if self.button { 0x1 } else { 0x0 };
+    }
+
+    fn account_report(&mut self, report: &WheelMouseReport) {
+        self.unreported_movement.x -= i64::from(report.x) * MOUSE_REPORT_SCALE;
+        self.unreported_movement.y -= i64::from(report.y) * MOUSE_REPORT_SCALE;
     }
 }
 
-fn read_mouse_raw(i2c: &mut impl embedded_hal::i2c::I2c) -> Option<MouseState> {
+// The raw reading from the Arduino about joystick position and button state.
+fn read_mouse_raw(i2c: &mut impl embedded_hal::i2c::I2c) -> Option<(Point2D<i16>, ButtonState)> {
     let mut mouse_buffer: [u8; 5] = [0u8; 5];
 
     match i2c.read(0x08u8, mouse_buffer.as_mut_slice()) {
         Ok(_) => {
-            Some(MouseState{
-                x: i32::from(u16::from_be_bytes([mouse_buffer[0], mouse_buffer[1]])),
-                y: i32::from(u16::from_be_bytes([mouse_buffer[2], mouse_buffer[3]])),
-                pressed: mouse_buffer[4] == 1u8
-            })
+            Some((
+                Point2D::<i16>{
+                  x: i16::try_from(u16::from_be_bytes(mouse_buffer[0..2].try_into().unwrap())).unwrap(),
+                  y: i16::try_from(u16::from_be_bytes(mouse_buffer[2..4].try_into().unwrap())).unwrap()
+                },
+                mouse_buffer[4] == 1u8
+            ))
         },
         Err(_) => None,
     }
