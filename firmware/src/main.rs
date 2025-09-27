@@ -66,6 +66,9 @@ use embedded_io::Write;
 
 use panic_halt as _;
 
+use crate::key_table::MouseButton;
+use crate::key_table::MOUSE_MODIFIER_KEYS;
+
 mod debounce;
 mod key_table;
 
@@ -78,6 +81,9 @@ const HID_TICK_AND_MATRIX_SCAN_PERIOD_MS: u32 = 1;
 const KEYBOARD_REPORT_PERIOD_MS: u32 = 10;
 /// Period between sending consumer (media key) reports.
 const CONSUMER_REPORT_PERIOD_MS: u32 = 50;
+
+/// Distance mouse must move before space keys become mouse buttons
+const MOUSENESS_THRESHOLD: u64 = 5;
 
 type UsbMultiDev = UsbHidClass<
     'static,
@@ -235,11 +241,6 @@ fn main() -> ! {
     let mut consumer_count_down = timer.count_down();
     consumer_count_down.start(CONSUMER_REPORT_PERIOD_MS.millis());
 
-    // Way more than we ever need.
-    let mut key_codes_buffer: [Keyboard; 32] = Default::default();
-    let mut key_codes_len: usize = 0;
-    let mut consumer_codes_buffer: [Consumer; 10] = Default::default();
-    let mut consumer_codes_len: usize = 0;
 
     let mut previous_consumer_report: MultipleConsumerReport = Default::default();
 
@@ -248,6 +249,9 @@ fn main() -> ! {
         pac::NVIC::unmask(hal::pac::Interrupt::USBCTRL_IRQ);
     };
 
+    let mut buffers: ScanBuffers = Default::default();
+    // Distance mouse has moved without a normal key being pressed.
+    let mut mouseness: u64 = 0;
     let mut press_counter: u64 = 0;
     let mut mouse_tracker: MouseTracker = Default::default();
     let mut scan_clock: u64 = 0;
@@ -270,22 +274,16 @@ fn main() -> ! {
 
             scan_clock += 1;
             let press_counter_previous = press_counter;
-            (key_codes_len, consumer_codes_len) = scan_keys(
+            scan_keys(
                 &mut row_pins,
                 &mut column_pins,
                 &mut delay,
                 &mut debounce_states,
-                &mut key_codes_buffer,
-                &mut consumer_codes_buffer,
+                &mut buffers,
+                mouseness >= MOUSENESS_THRESHOLD,
                 scan_clock,
                 || press_counter += 1
             );
-
-            if key_codes_len == 0 && consumer_codes_len == 0 {
-                led_pin.set_low().unwrap()
-            } else {
-                led_pin.set_high().unwrap()
-            }
 
             if press_counter != press_counter_previous && true {
                 let mut bytes = [0u8; 12];
@@ -296,7 +294,37 @@ fn main() -> ! {
         }
 
         if keyboard_count_down.wait().is_ok() {
-            mouse_tracker.update(&mut i2c);
+            if (scan_clock * u64::from(HID_TICK_AND_MATRIX_SCAN_PERIOD_MS)) >= 500 {
+                // Update the mouse only if we have been running for more that 0.5 seconds.
+                // The joystick origin is garbage shortly after boot.
+                mouse_tracker.update(&mut i2c);
+            }
+            let mut mouse_report = WheelMouseReport::default();
+            mouse_tracker.populate_report(&mut mouse_report);
+            buffers.mouse_buttons.iter().for_each(|b|{
+                match b {
+                    MouseButton::Left => mouse_report.buttons |= 0x1,
+                    MouseButton::Right => mouse_report.buttons |= 0x2
+                }
+            });
+
+            mouseness += u64::try_from(mouse_report.x.abs()).unwrap();
+            mouseness += u64::try_from(mouse_report.y.abs()).unwrap();
+
+            if mouseness != 0 {
+                if buffers.consumer_codes.is_empty() && buffers.key_codes.iter().all(|k| MOUSE_MODIFIER_KEYS.contains(k)) {
+                    // No consumer keys pressed, all keyboard keys are modifiers.
+                    // stay in mouse mode
+                } else {
+                    mouseness = 0;
+                }
+            }
+
+            if mouseness >= MOUSENESS_THRESHOLD {
+                led_pin.set_high().unwrap();
+            } else {
+                led_pin.set_low().unwrap();
+            }
 
             cortex_m::interrupt::free(|cs| {
                 let mut x = MULTI_DEV.borrow(cs).borrow_mut();
@@ -304,7 +332,7 @@ fn main() -> ! {
 
                     let keyboard = multi.device::<NKROBootKeyboard<'_, _>, _>();
 
-                    match keyboard.write_report((key_codes_buffer[..key_codes_len]).iter().copied()) {
+                    match keyboard.write_report(buffers.key_codes.iter().copied()) {
                         Ok(_) => {}
                         Err(UsbHidError::WouldBlock) => {}
                         Err(UsbHidError::Duplicate) => {}
@@ -312,8 +340,6 @@ fn main() -> ! {
                     }
 
                     let mouse = multi.device::<WheelMouse<'_, _>, _>();
-                    let mut mouse_report = WheelMouseReport::default();
-                    mouse_tracker.populate_report(&mut mouse_report);
 
                     match mouse.write_report(&mouse_report) {
                         Ok(_) => {
@@ -329,9 +355,9 @@ fn main() -> ! {
 
         if consumer_count_down.wait().is_ok() {
             let mut consumer_report = MultipleConsumerReport::default();
-            let len = usize::min(consumer_codes_len, consumer_report.codes.len());
+            let len = usize::min(buffers.consumer_codes.len(), consumer_report.codes.len());
             consumer_report.codes[..len]
-                .copy_from_slice(&consumer_codes_buffer[..len]);
+                .copy_from_slice(&buffers.consumer_codes.as_slice()[..len]);
 
             cortex_m::interrupt::free(|cs| {
                 let mut x = MULTI_DEV.borrow(cs).borrow_mut();
@@ -353,6 +379,23 @@ fn main() -> ! {
 
         // Avoid busylooping, we poll the timers at 10KHz.
         delay.delay_us(100);
+    }
+}
+
+// The result of scanning which keys are pressed.
+#[derive(Default)]
+struct ScanBuffers {
+    // Way more than we ever need.
+    key_codes: heapless::Vec<Keyboard, 32>,
+    consumer_codes: heapless::Vec<Consumer, 10>,
+    mouse_buttons: heapless::Vec<MouseButton, 2>,
+}
+
+impl ScanBuffers {
+    fn clear(&mut self) {
+        self.key_codes.clear();
+        self.consumer_codes.clear();
+        self.mouse_buttons.clear();
     }
 }
 
@@ -380,7 +423,8 @@ fn mouse_curve(d: i16) -> i32 {
     }
 }
 
-static MOUSE_REPORT_SCALE: i64 = 30_000;
+/// Bigger means slower cursor.
+static MOUSE_REPORT_SCALE: i64 = 40_000;
 
 impl MouseTracker {
     // Read mouse position from i2c, updating internal measurement of movement.
@@ -388,7 +432,7 @@ impl MouseTracker {
         if let Some(raw) = read_mouse_raw(i2c) {
             self.button = raw.1;
             if self.origin.is_none() {
-                self.origin = Some(raw.0.clone())
+                self.origin = Some(raw.0.clone());
             }
 
             let raw = raw.0;
@@ -421,8 +465,8 @@ fn read_mouse_raw(i2c: &mut impl embedded_hal::i2c::I2c) -> Option<(Point2D<i16>
         Ok(_) => {
             Some((
                 Point2D::<i16>{
-                  x: i16::try_from(u16::from_be_bytes(mouse_buffer[0..2].try_into().unwrap())).unwrap(),
-                  y: i16::try_from(u16::from_be_bytes(mouse_buffer[2..4].try_into().unwrap())).unwrap()
+                  x: -i16::try_from(u16::from_be_bytes(mouse_buffer[2..4].try_into().unwrap())).unwrap(),
+                  y: i16::try_from(u16::from_be_bytes(mouse_buffer[0..2].try_into().unwrap())).unwrap()
                 },
                 mouse_buffer[4] == 1u8
             ))
@@ -436,13 +480,12 @@ fn scan_keys<F: FnMut()>(
     column_pins: &mut [&mut Pin<DynPinId, FunctionSio<SioInput>, PullDown>; KEY_COLUMNS],
     delay: &mut Delay,
     debounce_states: &mut [[DebounceState; KEY_COLUMNS]; KEY_ROWS],
-    key_buffer: &mut [Keyboard],
-    consumer_buffer: &mut [Consumer],
+    buffers: &mut ScanBuffers,
+    mouseish: bool,
     scan_clock: u64,
     mut press_action: F
-) -> (usize, usize) {
-    let mut key_out_idx: usize = 0;
-    let mut consumer_out_idx: usize = 0;
+) -> () {
+    buffers.clear();
 
     assert_eq!(KEY_MAPPING.len(), row_pins.len());
     for (row_idx, row_mapping) in KEY_MAPPING.iter().enumerate() {
@@ -458,32 +501,34 @@ fn scan_keys<F: FnMut()>(
                 (_, false) => {}
                 (KeyFunction::Nothing, _) => {}
                 (KeyFunction::Key(Keyboard::NoEventIndicated), _) => {}
-                (KeyFunction::Key(Keyboard::Space), true) => {
-                                // The space key is a bit special - as there are two on the board.
-                                if !key_buffer[..key_out_idx].contains(&Keyboard::Space) {
-                                    key_buffer[key_out_idx] = Keyboard::Space;
-                                    key_out_idx += 1;
+                (KeyFunction::Key(key), true) => {
+                                if !buffers.key_codes.contains(key) {
+                                    buffers.key_codes.push(*key).unwrap();
                                 }
                             }
-                (KeyFunction::Key(key), true) => {
-                                key_buffer[key_out_idx] = *key;
-                                key_out_idx += 1;
-                            }
                 (KeyFunction::Media(consumer), true) => {
-                                consumer_buffer[consumer_out_idx] = *consumer;
-                                consumer_out_idx += 1;
+                                buffers.consumer_codes.push(*consumer).unwrap();
                             }
                 (KeyFunction::MultiKey(keys), true) => {
-                    let len = keys.len();
-                    key_buffer[key_out_idx..][..len].copy_from_slice(keys);
-                    key_out_idx += len;
+                    keys.iter().for_each(|k| {
+                        if !buffers.key_codes.contains(k) {
+                            buffers.key_codes.push(*k).unwrap();
+                        }
+                    });
                 },
+                (KeyFunction::Dual(key, mouse_button), true) => {
+                    if mouseish {
+                        buffers.mouse_buttons.push(*mouse_button).unwrap();
+                    } else {
+                        if !buffers.key_codes.contains(key) {
+                            buffers.key_codes.push(*key).unwrap();
+                        }
+                    }
+                }
             }
         }
         row_pins[row_idx].set_low().unwrap();
     }
-
-    (key_out_idx, consumer_out_idx)
 }
 
 #[allow(non_snake_case)]

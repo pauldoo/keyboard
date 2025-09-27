@@ -5,12 +5,36 @@ use Keyboard::*;
 
 use KeyFunction::*;
 
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) enum MouseButton {
+    #[default]
+    Left,
+    Right
+}
+
+
+
 pub(crate) enum KeyFunction {
     Nothing,
     Key(Keyboard),
     MultiKey(&'static [Keyboard]),
-    Media(Consumer)
+    Media(Consumer),
+    // Some buttons are dual function, acting either as a keyboard button
+    // or as a mouse button.
+    Dual(Keyboard, MouseButton)
 }
+
+/// Most keys on the keyboard will return the keyboard from mousish
+/// mode back to normal mode, _except_ for this.
+/// 
+/// In other words, these keys are the ones we expect to be used as
+/// modifiers along with a mouse click.
+pub(crate) const MOUSE_MODIFIER_KEYS: [Keyboard; 4] = [
+    LeftShift,
+    LeftControl,
+    LeftGUI,
+    LeftAlt
+];
 
 pub(crate) const KEY_MAPPING: [[KeyFunction; KEY_COLUMNS]; KEY_ROWS] = [
     [
@@ -21,10 +45,10 @@ pub(crate) const KEY_MAPPING: [[KeyFunction; KEY_COLUMNS]; KEY_ROWS] = [
         Key(LeftAlt),      //
         Nothing,           // not wired
         Nothing,           // not wired
-        Key(Space),        //
+        Dual(Space, MouseButton::Left),        //
         Nothing,           // not wired
         Nothing,           // not wired
-        Key(Space),        //
+        Dual(Space, MouseButton::Right),        //
         Nothing,           // not wired
         Key(RightAlt),     //
         Key(RightGUI),     //
