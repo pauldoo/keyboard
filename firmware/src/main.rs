@@ -2,6 +2,7 @@
 #![no_main]
 
 use core::cell::RefCell;
+use core::panic::PanicInfo;
 
 use cortex_m::delay::Delay;
 use cortex_m::interrupt::Mutex;
@@ -19,10 +20,6 @@ use fugit::ExtU32;
 
 // GPIO traits
 use embedded_hal::digital::OutputPin;
-
-// Ensure we halt the program on panic (if we don't mention this crate it won't
-// be linked)
-use panic_halt as _;
 
 use rp_pico::hal::gpio::DynPinId;
 use rp_pico::hal::gpio::FunctionSio;
@@ -64,8 +61,6 @@ use fugit::RateExtU32;
 
 use embedded_io::Write;
 
-use panic_halt as _;
-
 use crate::key_table::MouseButton;
 use crate::key_table::MOUSE_MODIFIER_KEYS;
 
@@ -98,6 +93,30 @@ type UsbMultiDev = UsbHidClass<
 static USB_DEV: Mutex<RefCell<Option<UsbDevice<hal::usb::UsbBus>>>> = Mutex::new(RefCell::new(None));
 
 static MULTI_DEV: Mutex<RefCell<Option<UsbMultiDev>>> = Mutex::new(RefCell::new(None));
+
+type LedPin = Pin<hal::gpio::bank0::Gpio25, FunctionSio<SioOutput>, PullDown>;
+static LED_PIN: Mutex<RefCell<Option<LedPin>>> = Mutex::new(RefCell::new(None));
+
+#[panic_handler]
+fn flash_led(_: &PanicInfo) -> ! {
+    let mut on = true;
+    loop {
+        cortex_m::interrupt::free(|cs| {
+            let mut led_pin = LED_PIN.borrow(cs).borrow_mut();
+            if let Some(led_pin) = led_pin.as_mut() {
+                if on {
+                    led_pin.set_high().unwrap();
+                } else {
+                    led_pin.set_low().unwrap();
+                }
+            }
+        });
+        on = !on;
+        for _ in 0..10_000_000 {
+            core::hint::spin_loop();
+        }
+    }
+}
 
 /// Entry point to our bare-metal application.
 ///
@@ -142,6 +161,15 @@ fn main() -> ! {
         sio.gpio_bank0,
         &mut pac.RESETS,
     );
+
+    {
+        // Set the LED to be an output
+        let led_pin: Pin<hal::gpio::bank0::Gpio25, FunctionSio<SioOutput>, PullDown> = pins.led.into_push_pull_output();
+        cortex_m::interrupt::free(|cs| {
+            LED_PIN.borrow(cs).replace(Some(led_pin));
+        });
+    }
+
 
     static USB_ALLOC: StaticCell<UsbBusAllocator<hal::usb::UsbBus>> = StaticCell::new();
     let usb_alloc = USB_ALLOC.init(UsbBusAllocator::new(hal::usb::UsbBus::new(
@@ -196,9 +224,6 @@ fn main() -> ! {
     // milliseconds)
     let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
 
-    // Set the LED to be an output
-    let mut led_pin = pins.led.into_push_pull_output();
-
     let mut row_pins: [&mut Pin<DynPinId, FunctionSio<SioOutput>, PullDown>; KEY_ROWS] = [
         &mut pins.gpio17.into_push_pull_output().into_dyn_pin(),
         &mut pins.gpio18.into_push_pull_output().into_dyn_pin(),
@@ -227,8 +252,6 @@ fn main() -> ! {
         &mut pins.gpio15.into_pull_down_input().into_dyn_pin(),
         &mut pins.gpio16.into_pull_down_input().into_dyn_pin(),
     ];
-
-    led_pin.set_low().unwrap();
 
     let mut debounce_states: [[DebounceState; KEY_COLUMNS]; KEY_ROWS] = Default::default();
 
@@ -320,13 +343,15 @@ fn main() -> ! {
                 }
             }
 
-            if mouseness >= MOUSENESS_THRESHOLD {
-                led_pin.set_high().unwrap();
-            } else {
-                led_pin.set_low().unwrap();
-            }
-
             cortex_m::interrupt::free(|cs| {
+                if let Some(led_pin) = LED_PIN.borrow(cs).borrow_mut().as_mut() {
+                    if mouseness >= MOUSENESS_THRESHOLD {
+                        led_pin.set_high().unwrap();
+                    } else {
+                        led_pin.set_low().unwrap();
+                    }
+                }
+
                 let mut x = MULTI_DEV.borrow(cs).borrow_mut();
                 if let Some(multi) = x.as_mut() {
 

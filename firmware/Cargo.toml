@@ -15,7 +15,6 @@ embedded-io = "0.6.1"
 frunk = { version = "0.4", default-features = false }
 fugit = "0.3.7"
 heapless = "0.9.1"
-panic-halt = "1.0.0"
 portable-atomic = { version = "1.11", features = ["critical-section"] }
 rp-pico = "0.9.0"
 rp2040-hal = "0.11"
