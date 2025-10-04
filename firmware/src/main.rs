@@ -112,9 +112,7 @@ fn flash_led(_: &PanicInfo) -> ! {
             }
         });
         on = !on;
-        for _ in 0..10_000_000 {
-            core::hint::spin_loop();
-        }
+        cortex_m::asm::delay(10_000_000);
     }
 }
 
@@ -317,29 +315,31 @@ fn main() -> ! {
         }
 
         if keyboard_count_down.wait().is_ok() {
-            if (scan_clock * u64::from(HID_TICK_AND_MATRIX_SCAN_PERIOD_MS)) >= 500 {
-                // Update the mouse only if we have been running for more that 0.5 seconds.
-                // The joystick origin is garbage shortly after boot.
-                mouse_tracker.update(&mut i2c);
-            }
             let mut mouse_report = WheelMouseReport::default();
-            mouse_tracker.populate_report(&mut mouse_report);
-            buffers.mouse_buttons.iter().for_each(|b|{
-                match b {
-                    MouseButton::Left => mouse_report.buttons |= 0x1,
-                    MouseButton::Right => mouse_report.buttons |= 0x2
-                }
-            });
 
-            mouseness += u64::try_from(mouse_report.x.abs()).unwrap();
-            mouseness += u64::try_from(mouse_report.y.abs()).unwrap();
+            if (scan_clock * u64::from(HID_TICK_AND_MATRIX_SCAN_PERIOD_MS)) >= 1500 {
+                // Update the mouse only if we have been running for more that 1.5 seconds.
+                // The joystick origin is garbage shortly after boot.
+                mouse_tracker.update(&mut i2c, false);
 
-            if mouseness != 0 {
-                if buffers.consumer_codes.is_empty() && buffers.key_codes.iter().all(|k| MOUSE_MODIFIER_KEYS.contains(k)) {
-                    // No consumer keys pressed, all keyboard keys are modifiers.
-                    // stay in mouse mode
-                } else {
-                    mouseness = 0;
+                mouse_tracker.populate_report(&mut mouse_report);
+                buffers.mouse_buttons.iter().for_each(|b|{
+                    match b {
+                        MouseButton::Left => mouse_report.buttons |= 0x1,
+                        MouseButton::Right => mouse_report.buttons |= 0x2
+                    }
+                });
+
+                mouseness += u64::try_from(mouse_report.x.abs()).unwrap();
+                mouseness += u64::try_from(mouse_report.y.abs()).unwrap();
+
+                if mouseness != 0 {
+                    if buffers.consumer_codes.is_empty() && buffers.key_codes.iter().all(|k| MOUSE_MODIFIER_KEYS.contains(k)) {
+                        // No consumer keys pressed, all keyboard keys are modifiers.
+                        // stay in mouse mode
+                    } else {
+                        mouseness = 0;
+                    }
                 }
             }
 
@@ -453,10 +453,10 @@ static MOUSE_REPORT_SCALE: i64 = 40_000;
 
 impl MouseTracker {
     // Read mouse position from i2c, updating internal measurement of movement.
-    fn update(&mut self, i2c: &mut impl embedded_hal::i2c::I2c) {
+    fn update(&mut self, i2c: &mut impl embedded_hal::i2c::I2c, reset: bool) {
         if let Some(raw) = read_mouse_raw(i2c) {
             self.button = raw.1;
-            if self.origin.is_none() {
+            if self.origin.is_none() || reset {
                 self.origin = Some(raw.0.clone());
             }
 
