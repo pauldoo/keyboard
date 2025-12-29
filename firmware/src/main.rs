@@ -2,7 +2,6 @@
 #![no_main]
 
 use core::cell::RefCell;
-use core::panic::PanicInfo;
 
 use cortex_m::delay::Delay;
 use cortex_m::interrupt::Mutex;
@@ -61,6 +60,10 @@ use fugit::RateExtU32;
 
 use embedded_io::Write;
 
+use defmt::{info, warn, error};
+use defmt_rtt as _;
+use panic_probe as _;
+
 use crate::key_table::MouseButton;
 use crate::key_table::MOUSE_MODIFIER_KEYS;
 
@@ -97,25 +100,6 @@ static MULTI_DEV: Mutex<RefCell<Option<UsbMultiDev>>> = Mutex::new(RefCell::new(
 type LedPin = Pin<hal::gpio::bank0::Gpio25, FunctionSio<SioOutput>, PullDown>;
 static LED_PIN: Mutex<RefCell<Option<LedPin>>> = Mutex::new(RefCell::new(None));
 
-#[panic_handler]
-fn flash_led(_: &PanicInfo) -> ! {
-    let mut on = true;
-    loop {
-        cortex_m::interrupt::free(|cs| {
-            let mut led_pin = LED_PIN.borrow(cs).borrow_mut();
-            if let Some(led_pin) = led_pin.as_mut() {
-                if on {
-                    led_pin.set_high().unwrap();
-                } else {
-                    led_pin.set_low().unwrap();
-                }
-            }
-        });
-        on = !on;
-        cortex_m::asm::delay(10_000_000);
-    }
-}
-
 /// Entry point to our bare-metal application.
 ///
 /// The `#[entry]` macro ensures the Cortex-M start-up code calls this function
@@ -125,6 +109,10 @@ fn flash_led(_: &PanicInfo) -> ! {
 /// infinite loop.
 #[entry]
 fn main() -> ! {
+    info!("info test");
+    warn!("warn test");
+    error!("error test");
+
     // Grab our singleton objects
     let mut pac = pac::Peripherals::take().unwrap();
     let core = pac::CorePeripherals::take().unwrap();
