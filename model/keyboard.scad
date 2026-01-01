@@ -5,7 +5,7 @@ $fs = 0.1;
 $fa = 5;
 
 // width of a key face
-key_face_d = 15;
+key_face_d = 13;
 // thickness of a key face
 key_face_t = 2;
 // length of key stem
@@ -37,7 +37,7 @@ magic_key_width = 1.5; // caps aren't this big, only the space on the board.
 
 keeb_depth = 20;
 
-font_name="MesloLGL Nerd Font:style=Bold";
+font_name="Ubuntu Nerd Font:style=Bold";
 
 module switch_hole() {
     // make a hold in the center
@@ -62,7 +62,7 @@ module key_face(s1, s2=undef, width=1.0, bump=false) {
             cube([key_face_d + (width-1.0)*key_stride, key_face_d, key_face_t], center=true);
             
             po = (s2 != undef) ? -0.125 : 0;
-            base_font_size = (s2 != undef) ? 7 : 12;
+            base_font_size = (s2 != undef) ? 6 : 11;
             if (s1 != undef) {
                 translate([0, key_face_d*po, key_face_t - 0.5]) {
                     linear_extrude(height=key_face_t, center=true) {
@@ -145,20 +145,23 @@ module stem() {
 
 module key_wall(x, y) {
     multmatrix([
-        [1,0,-1/(stem_l + key_face_t),(key_face_d + (x-1)*key_stride)/2],
+        [1,0,-2/(stem_l + key_face_t),1 + (key_face_d + (x-1)*key_stride)/2],
         [0,1,0,-(key_face_d + (y-1)*key_stride)/2],
         [0,0,1,0]]
     ) {
         cube([1, key_face_d + (y-1)*key_stride, stem_l + key_face_t]);
     }
-    translate([(key_face_d + (x-1)*key_stride)/2, (key_face_d + (y-1)*key_stride)/2, 0]) {
-        difference() {
-            cylinder(stem_l + key_face_t, 1, 0);
-            translate([-1, -1, -0.5]) {
-                cube([1, 1, stem_l + key_face_t + 1]);
-            }
-            
+
+    translate([0, 0, 0])    
+    translate([(key_face_d + (x-1)*key_stride)/2, (key_face_d + (y-1)*key_stride)/2, 0])
+    difference() {
+        intersection() {
+          cylinder(stem_l + key_face_t, 2, 0);
+          translate([0, 0, -0.5])
+          cube([4, 4, stem_l + key_face_t + 1]);
         }
+        translate([0, 0, -(stem_l + key_face_t)/2])
+        cylinder(stem_l + key_face_t, 2, 0);
     }
 }
 
@@ -194,7 +197,7 @@ module enter_key() {
             key_cap(undef, width=enter_bottom_width);
         }
         //sphere(r=10);
-        cutout_x = key_face_d + (enter_bottom_width-1) * key_stride - 2;
+        cutout_x = key_face_d + (enter_bottom_width-1) * key_stride - 1;
         cutout_y = key_face_d + key_stride - 2;
         translate([
             -cutout_x / 2, 
@@ -460,6 +463,7 @@ module blue_keys() {
     ]);
 }
 
+
 left_board();
 
 translate([9*key_stride + border*2, 0, 0]) right_board();
@@ -468,4 +472,6 @@ translate([0, -2 * key_stride, 0]) blue_keys();
 translate([0, -8 * key_stride, 0]) yellow_keys();
 
 translate([-1*key_stride, -3*key_stride, 0]) enter_key();
+
+//key_rows([["Del"]]);
 
