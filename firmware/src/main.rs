@@ -83,6 +83,8 @@ const CONSUMER_REPORT_PERIOD_MS: u32 = 50;
 /// Distance mouse must move before space keys become mouse buttons
 const MOUSENESS_THRESHOLD: u64 = 5;
 
+const MOUSE_OFF: bool = true;
+
 type UsbMultiDev = UsbHidClass<
     'static,
     hal::usb::UsbBus,
@@ -474,18 +476,26 @@ impl MouseTracker {
 fn read_mouse_raw(i2c: &mut impl embedded_hal::i2c::I2c) -> Option<(Point2D<i16>, ButtonState)> {
     let mut mouse_buffer: [u8; 5] = [0u8; 5];
 
-    match i2c.read(0x08u8, mouse_buffer.as_mut_slice()) {
-        Ok(_) => {
-            Some((
-                Point2D::<i16>{
-                  x: -i16::try_from(u16::from_be_bytes(mouse_buffer[2..4].try_into().unwrap())).unwrap(),
-                  y: i16::try_from(u16::from_be_bytes(mouse_buffer[0..2].try_into().unwrap())).unwrap()
-                },
-                mouse_buffer[4] == 1u8
-            ))
-        },
-        Err(_) => None,
+    if MOUSE_OFF {
+        Some((Point2D::<i16>{
+            x: 512,
+            y: 512,
+        }, false))
+    } else {
+        match i2c.read(0x08u8, mouse_buffer.as_mut_slice()) {
+            Ok(_) => {
+                Some((
+                    Point2D::<i16>{
+                    x: -i16::try_from(u16::from_be_bytes(mouse_buffer[2..4].try_into().unwrap())).unwrap(),
+                    y: i16::try_from(u16::from_be_bytes(mouse_buffer[0..2].try_into().unwrap())).unwrap()
+                    },
+                    mouse_buffer[4] == 1u8
+                ))
+            },
+            Err(_) => None,
+        }
     }
+
 }
 
 fn scan_keys<F: FnMut()>(
