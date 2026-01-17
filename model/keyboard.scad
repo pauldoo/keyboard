@@ -471,7 +471,5 @@ translate([9*key_stride + border*2, 0, 0]) right_board();
 translate([0, -2 * key_stride, 0]) blue_keys();
 translate([0, -8 * key_stride, 0]) yellow_keys();
 
-translate([-1*key_stride, -3*key_stride, 0]) enter_key();
-
-//key_rows([["Del"]]);
+translate([3*key_stride, -6.5*key_stride, 0]) enter_key();
 
