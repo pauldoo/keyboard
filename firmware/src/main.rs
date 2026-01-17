@@ -513,7 +513,7 @@ fn scan_keys<F: FnMut()>(
     assert_eq!(KEY_MAPPING.len(), row_pins.len());
     for (row_idx, row_mapping) in KEY_MAPPING.iter().enumerate() {
         row_pins[row_idx].set_high().unwrap();
-        delay.delay_us(1);
+        delay.delay_us(5);
 
         assert_eq!(row_mapping.len(), column_pins.len());
         for (col_idx, function) in row_mapping.iter().enumerate() {
