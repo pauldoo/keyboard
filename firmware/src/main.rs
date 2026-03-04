@@ -8,7 +8,6 @@ use cortex_m::interrupt::Mutex;
 use cortex_m::prelude::*;
 
 use debounce::DebounceState;
-use embedded_hal::digital::InputPin;
 use key_table::KeyFunction;
 use key_table::KEY_MAPPING;
 // The macro for our start-up function
@@ -137,7 +136,9 @@ fn main() -> ! {
     .ok()
     .unwrap();
 
-    let timer = Timer::new(pac.TIMER, &mut pac.RESETS, &clocks);
+    let timer: Timer = Timer::new(pac.TIMER, &mut pac.RESETS, &clocks);
+
+
 
     // The single-cycle I/O block controls our GPIO pins
     let sio = hal::Sio::new(pac.SIO);
@@ -208,6 +209,8 @@ fn main() -> ! {
         &clocks.peripheral_clock,
     );
 
+    let stolen_sio: pac::SIO =     unsafe { pac::Peripherals::steal() }.SIO;
+
     // The delay object lets us wait for specified amounts of time (in
     // milliseconds)
     let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
@@ -221,7 +224,7 @@ fn main() -> ! {
         &mut pins.gpio22.into_push_pull_output().into_dyn_pin(),
     ];
 
-    let mut column_pins: [&mut Pin<DynPinId, FunctionSio<SioInput>, PullDown>; KEY_COLUMNS] = [
+    let _column_pins: [&mut Pin<DynPinId, FunctionSio<SioInput>, PullDown>; KEY_COLUMNS] = [
         &mut pins.gpio0.into_pull_down_input().into_dyn_pin(),
         &mut pins.gpio1.into_pull_down_input().into_dyn_pin(),
         &mut pins.gpio2.into_pull_down_input().into_dyn_pin(),
@@ -287,7 +290,8 @@ fn main() -> ! {
             let press_counter_previous = press_counter;
             scan_keys(
                 &mut row_pins,
-                &mut column_pins,
+                & stolen_sio,
+                & timer,
                 &mut delay,
                 &mut debounce_states,
                 &mut buffers,
@@ -500,7 +504,9 @@ fn read_mouse_raw(i2c: &mut impl embedded_hal::i2c::I2c) -> Option<(Point2D<i16>
 
 fn scan_keys<F: FnMut()>(
     row_pins: &mut [&mut Pin<DynPinId, FunctionSio<SioOutput>, PullDown>; KEY_ROWS],
-    column_pins: &mut [&mut Pin<DynPinId, FunctionSio<SioInput>, PullDown>; KEY_COLUMNS],
+    stolen_sio: &pac::SIO,
+    //column_pins: &mut [&mut Pin<DynPinId, FunctionSio<SioInput>, PullDown>; KEY_COLUMNS],
+    timer: &Timer,
     delay: &mut Delay,
     debounce_states: &mut [[DebounceState; KEY_COLUMNS]; KEY_ROWS],
     buffers: &mut ScanBuffers,
@@ -509,15 +515,46 @@ fn scan_keys<F: FnMut()>(
     mut press_action: F
 ) -> () {
     buffers.clear();
-
     assert_eq!(KEY_MAPPING.len(), row_pins.len());
-    for (row_idx, row_mapping) in KEY_MAPPING.iter().enumerate() {
-        row_pins[row_idx].set_high().unwrap();
-        delay.delay_us(5);
 
-        assert_eq!(row_mapping.len(), column_pins.len());
+    // How long to wait after the output rise before reading.
+    const RISE_DELAY_US: u32 = 5;
+    // How long to wait after the output fall before reading.
+    const FALL_DELAY_US: u32 = 10;
+
+    row_pins[0].set_high().unwrap();
+    let mut change_time = timer.get_counter();
+
+    for (row_idx, row_mapping) in KEY_MAPPING.iter().enumerate() {
+        //assert_eq!(row_mapping.len(), column_pins.len());
+
+        // Wait for steady signal
+        if row_idx == 0 {
+            delay.delay_us(RISE_DELAY_US);
+        } else {
+            let required_delay = u32::max(RISE_DELAY_US, FALL_DELAY_US);
+
+            let time_since_change = u32::try_from((timer.get_counter() - change_time).to_micros()).unwrap();
+            if time_since_change < required_delay {
+                delay.delay_us(required_delay - time_since_change);
+            }
+        }
+
+        // Read input pins
+        let col_inputs = stolen_sio.gpio_in().read().bits();
+
+        // Set output pins for next row.
+        row_pins[row_idx].set_low().unwrap();
+        if row_idx + 1 < row_pins.len() {
+            row_pins[row_idx + 1].set_high().unwrap();
+            change_time = timer.get_counter();
+        }
+
+        // Process row
         for (col_idx, function) in row_mapping.iter().enumerate() {
-            let input = column_pins[col_idx].is_high().unwrap();
+            //let input = column_pins[col_idx].is_high().unwrap();
+            let input = (col_inputs & (1 << col_idx)) != 0;
+
             let is_depressed = debounce_states[row_idx][col_idx].update(input, scan_clock, &mut press_action);
 
             match (function, is_depressed) {
@@ -550,7 +587,6 @@ fn scan_keys<F: FnMut()>(
                 }
             }
         }
-        row_pins[row_idx].set_low().unwrap();
     }
 }
 
